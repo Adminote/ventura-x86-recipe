@@ -16,7 +16,7 @@ from . import net
 
 if TYPE_CHECKING:        # annotations only: importing sources here would be circular
     from . import sources
-from .util import PlatformInfo, run, warn
+from .util import PlatformInfo, activity, run, warn
 
 # Current homebrew-core bottle tags (Homebrew 4/5, tested 2026):
 #   {arch}_{macos}, osx->golden_gate(10.16), ventura(13), sonoma(14), sequoia(15), tahoe(26),
@@ -74,7 +74,8 @@ def formula_json(name: str, ttl_days: int = 1) -> dict | None:
         except Exception:
             pass
     for base in api_bases():
-        r = net.request(f"{base}/formula/{name}.json", timeout=30)
+        with activity(f"looking up {name} in the Homebrew API ({base.split('/')[2]})"):
+            r = net.request(f"{base}/formula/{name}.json", timeout=30)
         if not r.ok:
             continue
         try:
@@ -107,7 +108,9 @@ def formula_index(fetch: bool = True) -> list[dict]:
     if not fetch:
         return []
     for base in api_bases():
-        r = net.request(f"{base}/formula.json", timeout=120, show_progress=True)
+        host = base.split("/")[2]
+        with activity(f"fetching the Homebrew formula index (~30 MB) from {host}"):
+            r = net.request(f"{base}/formula.json", timeout=180, show_progress=True)
         if not r.ok:
             continue
         try:

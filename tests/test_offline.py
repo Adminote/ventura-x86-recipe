@@ -523,3 +523,36 @@ def why_verdict(data):
     from intelbrew import why
 
     return why.verdict(data)
+
+
+# --------------------------------------------------------------------------- #
+# progress / liveness
+# --------------------------------------------------------------------------- #
+
+def test_activity_prints_start_and_finish_when_not_a_tty(capsys):
+    import time
+
+    from intelbrew import util
+
+    with util.activity("doing something slow", slow_after=0.05):
+        time.sleep(0.12)
+    err = capsys.readouterr().err
+    assert "doing something slow" in err
+    assert "0.1" in err or "0.0" in err           # finished with a duration
+
+
+def test_progress_header_carries_elapsed(capsys):
+    from intelbrew import util
+
+    util.progress("resolving things")
+    out = capsys.readouterr().out
+    assert "resolving things" in out
+    assert "[" in out and "s]" in out
+
+
+def test_activity_swallows_nothing_on_exception(capsys):
+    from intelbrew import util
+
+    with pytest.raises(RuntimeError), util.activity("boom", slow_after=0):
+        raise RuntimeError("x")
+    assert "✓" not in capsys.readouterr().err

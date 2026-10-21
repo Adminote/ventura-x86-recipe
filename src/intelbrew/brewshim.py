@@ -179,6 +179,7 @@ def install(argv: list[str], pf: PlatformInfo) -> int:
         rc = r.returncode
     if rerouted:
         from . import planner
+        from .util import progress
 
         for f in rerouted:
             r = planner.resolve(f, pf)
@@ -186,8 +187,8 @@ def install(argv: list[str], pf: PlatformInfo) -> int:
                 err(f"{f}: {r.blocked}")
                 rc = rc or 1
                 continue
-            info(f"{f}: Homebrew has no {pf.pretty_name} bottle — using {r.how} "
-                 f"({r.contract}, {r.confidence})")
+            progress(f"{f}: no {pf.pretty_name} bottle — installing {r.how} "
+                     f"{r.version} ({r.contract}, {r.confidence})")
             for step in r.steps:
                 if step.get("kind") == "bottle":
                     st = installer.install_bottle(step, f, pf)

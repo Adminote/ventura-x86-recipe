@@ -29,7 +29,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from . import __version__
-from .util import info, warn
+from .util import activity, info, warn
 
 UA = f"intelbrew/{__version__} (+https://github.com/Adminote/ventura-x86-recipe)"
 GITHUB_PROXIES = [
@@ -165,13 +165,27 @@ def _ttl_fresh(path: str, ttl: int) -> bool:
 # --------------------------------------------------------------------------- #
 
 def request(url: str, *, timeout: float = DEFAULT_TIMEOUT, retries: int = DEFAULT_RETRIES,
-            headers: dict[str, str] | None = None, show_progress: bool = False) -> Fetch:
-    """GET a URL. Uses curl when available (fast, proxy-aware, resume-free)."""
+            headers: dict[str, str] | None = None, show_progress: bool = False,
+            label: str = "") -> Fetch:
+    """GET a URL. Uses curl when available (fast, proxy-aware, resume-free).
+
+    ``label`` turns on a liveness spinner (or a start/finish line when stderr is
+    not a terminal) so a slow mirror never looks like a hang.
+    """
     if OFFLINE:
         return Fetch(False, url, error="offline mode")
     hdrs = {"User-Agent": UA}
     if headers:
         hdrs.update(headers)
+    if not label:
+        return _request(url, hdrs, timeout, retries, show_progress)
+    host = urllib.parse.urlparse(url).netloc or url[:40]
+    with activity(f"{label or 'fetching'} from {host}"):
+        return _request(url, hdrs, timeout, retries, show_progress)
+
+
+def _request(url: str, hdrs: dict[str, str], timeout: float, retries: int,
+             show_progress: bool) -> Fetch:
     if shutil.which("curl") and not os.environ.get("IBREW_FORCE_URLLIB"):
         return _request_curl(url, hdrs, timeout, retries, show_progress)
     return _request_urllib(url, hdrs, timeout, retries)
@@ -288,7 +302,8 @@ def download_race(urls: list[str], dest: str, *, digest: str = "", algo: str = "
         procs.append((u, subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                                           stderr=subprocess.PIPE), out))
     if show:
-        info(f"downloading {os.path.basename(dest)} from {len(procs)} mirror(s)…")
+        hosts = ", ".join(sorted({urllib.parse.urlparse(u).netloc for u, _, _ in procs if u}))
+        info(f"downloading {os.path.basename(dest)} — racing {len(procs)} mirror(s): {hosts}")
     t0 = time.time()
     winner: tuple[str, str] | None = None
     while procs:
