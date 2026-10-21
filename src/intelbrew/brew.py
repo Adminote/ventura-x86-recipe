@@ -91,8 +91,12 @@ def formula_json(name: str, ttl_days: int = 1) -> dict | None:
     return None
 
 
-def formula_index() -> list[dict]:
-    """Full core formula list (used once, for the platform-support census)."""
+def formula_index(fetch: bool = True) -> list[dict]:
+    """Full core formula list (used once, for the platform-support census).
+
+    ``fetch=False`` only reads the cache: the index is ~32 MB and must never be
+    downloaded implicitly by a command the user thought was local (e.g. `setup`).
+    """
     cache = os.path.join(net.cache_dir("brew"), "formula-index.json")
     if net._ttl_fresh(cache, 3 * 86400):
         try:
@@ -100,8 +104,10 @@ def formula_index() -> list[dict]:
                 return json.load(fh)
         except Exception:
             pass
+    if not fetch:
+        return []
     for base in api_bases():
-        r = net.request(f"{base}/formula.json", timeout=180)
+        r = net.request(f"{base}/formula.json", timeout=120, show_progress=True)
         if not r.ok:
             continue
         try:
@@ -211,9 +217,9 @@ class Census:
         return 100.0 * len(self.binary) / max(self.total, 1)
 
 
-def census(pf: PlatformInfo) -> Census:
+def census(pf: PlatformInfo, fetch: bool = True) -> Census:
     tag = tag_for(pf)
-    idx = formula_index()
+    idx = formula_index(fetch=fetch)
     c = Census(pf=pf.to_dict(), tag=tag, total=len(idx))
     for f in idx:
         tags = set(((f.get("bottle") or {}).get("stable") or {}).get("files") or {})
