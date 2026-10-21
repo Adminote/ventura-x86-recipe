@@ -33,18 +33,46 @@ def shadow_dir() -> str:
     return installer._brew_bin_link_dir()
 
 
-def install_shadow(shim_path: str = "") -> str:
-    """Populate ~/.intelbrew/brew-bin; ``brew`` there is the shim, the rest is ours."""
+WRAPPER = """#!/bin/sh
+# intelbrew shim (generated; do not edit) — forwards to the real brew except for
+# install-like verbs whose formula Homebrew would compile from source.
+export PYTHONPATH="{src}:${{PYTHONPATH:-}}"
+exec "{python}" -m intelbrew.brewshim "$@"
+"""
+
+
+def install_shadow() -> str:
+    """Populate ``<home>/brew-bin/brew`` with a wrapper around this package."""
     d = shadow_dir()
     os.makedirs(d, exist_ok=True)
     real = os.environ.get("IBREW_REAL_BREW") or _find_real_brew()
     if not real:
         raise RuntimeError("real brew binary not found (set IBREW_REAL_BREW=/usr/local/bin/brew)")
+    src = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     link = os.path.join(d, "brew")
     if os.path.lexists(link):
         os.unlink(link)
-    os.symlink(shim_path or real, link)
+    with open(link, "w") as fh:
+        fh.write(WRAPPER.format(src=src, python=sys.executable))
+    os.chmod(link, 0o755)
     return d
+
+
+def _is_ours(path: str) -> bool:
+    """True when ``path`` is this shim (symlink or wrapper) rather than Homebrew."""
+    rp = os.path.realpath(path)
+    sh = os.path.realpath(shadow_dir())
+    pkg = os.path.dirname(os.path.abspath(__file__))
+    if rp == os.path.join(sh, "brew") or rp.startswith(sh + os.sep):
+        return True
+    if rp.startswith(pkg + os.sep) or os.path.basename(rp) == "ibrew":
+        return True
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(512)
+        return b"intelbrew" in head and b"brewshim" in head
+    except OSError:
+        return False
 
 
 def _find_real_brew() -> str | None:
@@ -54,7 +82,7 @@ def _find_real_brew() -> str | None:
         if not os.path.isfile(cand):
             continue
         rp = os.path.realpath(cand)
-        if "/.intelbrew/" in rp or rp == me:
+        if "/.intelbrew/" in rp or rp == me or _is_ours(cand):
             continue
         if os.access(cand, os.X_OK):
             return cand
@@ -89,17 +117,23 @@ def passthrough(argv: list[str]) -> int:
 # --------------------------------------------------------------------------- #
 
 def _classify(formula: str, pf: PlatformInfo) -> str:
-    """native | older-bottle | compile-only | not-formula"""
+    """native | rerouted | compile-only | not-formula
+
+    "rerouted" is anything the planner can install from a binary — a curated
+    recipe, an upstream release, a bottle built for an older macOS. Only when no
+    binary route exists does the formula go to Homebrew (which may compile).
+    """
     if formula.startswith("brew-"):
         return "not-formula"
+    from . import planner
+
     native_tag = brew.tag_for(pf)
     info_ = brew.bottle_info(formula)
     if info_ and info_.has(native_tag):
         return "native"
-    if info_:
-        c = brew.brew_bottle(formula, pf)
-        if c:
-            return "older-bottle"
+    r = planner.resolve(formula, pf)
+    if r.ok and r.how != "none":
+        return "rerouted"
     return "compile-only"
 
 
@@ -133,7 +167,7 @@ def install(argv: list[str], pf: PlatformInfo) -> int:
             native.append(f)
         elif kind == "not-formula" or f.startswith(SKIP_PREFIX):
             plain.append(f[5:] if f.startswith(SKIP_PREFIX) else f)
-        elif kind == "older-bottle":
+        elif kind == "rerouted":
             rerouted.append(f)
         else:
             plain.append(f)              # compile-only: let Homebrew do its thing
@@ -194,6 +228,15 @@ def status(pf: PlatformInfo) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if os.environ.get("IBREW_SHIM_DEPTH"):
+        # already inside the shim: this must be the real brew, never call us again
+        err("brew shim recursion detected; falling back to the real brew "
+            "(set IBREW_REAL_BREW=/usr/local/bin/brew)")
+        rb = _find_real_brew()
+        if rb and not _is_ours(rb):
+            os.execv(rb, [rb, *argv])
+        return 127
+    os.environ["IBREW_SHIM_DEPTH"] = "1"
     if not argv:
         return passthrough([])
     pf = current_platform()
@@ -201,3 +244,7 @@ def main(argv: list[str] | None = None) -> int:
     if verb in ("install", "reinstall", "upgrade"):
         return install(argv, pf)
     return passthrough(argv)
+
+
+if __name__ == "__main__":       # `python -m intelbrew.brewshim …`
+    sys.exit(main())
