@@ -27,6 +27,23 @@ git add registry/<名字>.json
 `--apply` 会下载、校验、解包、装进临时 prefix 并**真的运行**该二进制；成功后写入
 `verified` 块。只提交在真实 Intel Mac 上生成过新鲜 `verified` 块的 recipe（写明 macOS 版本）。
 
+## 分支流程（必须遵守）
+
+任何人都不直接提交到 `main`，维护者也不例外：
+
+```bash
+git switch main && git pull
+git switch -c fix/<主题>            # 或 docs/<主题>、registry/<名字>
+# … 修复、测试、提交 …
+git push -u origin fix/<主题>
+# 在干净 clone 上验证后再合并
+git switch main && git merge --no-ff fix/<主题> && git push
+```
+
+修 bug 前必须先复现，分支的提交信息要写清怎么复现的
+（`Found by running a fresh clone on a real Intel Mac: …`）。合并统一用 `--no-ff`，
+让修复作为一个整体可回溯。合并后删掉分支。
+
 ## 测试
 
 ```bash
