@@ -29,6 +29,23 @@ git add registry/<name>.json
 binary; on success it writes the `verified` block. Commit only recipes with a fresh
 `verified` block from a real Intel Mac (state the macOS version).
 
+## Branch workflow (required)
+
+Nobody commits to `main` directly, including maintainers:
+
+```bash
+git switch main && git pull
+git switch -c fix/<topic>          # or docs/<topic>, registry/<name>
+# … fix, test, commit …
+git push -u origin fix/<topic>
+# verify on a clean clone, then merge
+git switch main && git merge --no-ff fix/<topic> && git push
+```
+
+A bug fix must be reproduced **before** it is fixed, and the branch message should say how
+(`Found by running a fresh clone on a real Intel Mac: …`). Merges are `--no-ff` so the fix
+stays reviewable as one unit. Delete the branch after merging.
+
 ## Testing
 
 ```bash
