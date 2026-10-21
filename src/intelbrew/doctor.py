@@ -157,6 +157,28 @@ def check_proxy() -> list[Check]:
     return out
 
 
+def check_node_shims() -> list[Check]:
+    """node/npm/npx must not silently fall through to another runtime."""
+    from . import nodemgr
+
+    health = nodemgr.runtime_health()
+    out = []
+    broken = [h for h in health if h["state"] == "broken"]
+    for h in broken:
+        out.append(Check(f"node.shim.{h['shim']}", "fail",
+                         f"target missing: {h['target'] or '(unset)'}",
+                         fix="ibrew node use <major>  (or ibrew node install)"))
+    missing = [h for h in health if h["state"] == "absent"]
+    for h in missing:
+        out.append(Check(f"node.shim.{h['shim']}", "warn", "not installed",
+                         fix="ibrew setup --apply"))
+    if not broken and not missing:
+        out.append(Check("node.shims", "ok", ", ".join(
+            f"{h['shim']}→{os.path.basename(os.path.dirname(os.path.dirname(h['target'])))}"
+            for h in health)))
+    return out
+
+
 def check_node_ceiling(pf: PlatformInfo) -> list[Check]:
     out = []
     idx = sources.node_index()

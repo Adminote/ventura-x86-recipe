@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 
 from . import __version__, brew, brewshim, doctor, installer, net, nodemgr, planner, registry
@@ -62,6 +63,7 @@ def cmd_doctor(args) -> int:
     checks += doctor.check_toolchain()
     checks += doctor.check_network()
     checks += doctor.check_proxy()
+    checks += doctor.check_node_shims()
     checks += doctor.check_node_ceiling(pf)
     bad = _print_checks(checks)
     if args.formula:
@@ -222,20 +224,28 @@ def cmd_node(args) -> int:
     pf = _pf(args)
     if args.action == "list":
         print("\n".join(nodemgr.majors_installed()) or "(no managed runtimes)")
+        broken = [h for h in nodemgr.runtime_health() if h["state"] == "broken"]
+        for h in broken:
+            warn(f"{h['shim']} is broken (target missing: {h['target']}); "
+                 f"run `ibrew node use <major>`")
         return 0
     if args.action == "status":
         print(json.dumps({"runtimes": nodemgr.majors_installed(),
                           "shims": nodemgr.shim_status(),
+                          "health": nodemgr.runtime_health(),
                           "global_prefix": os.path.join(installer.root(), "npm")}, indent=2))
         return 0
     major = args.major
-    if args.action == "use":
-        if not major:
-            err("usage: ibrew node use <major>")
-            return 2
-        nodemgr.write_shims("shim", major, pf)
-        return 0
-    nodemgr.write_shims("shim", major, pf)     # install/default/update share this
+    if args.action == "use" and not major:
+        err("usage: ibrew node use <major>")
+        return 2
+    try:
+        nodemgr.write_shims("shim", major, pf)     # install/default/update share this
+    except nodemgr.NodeUnavailable as e:
+        err(str(e))
+        if e.hint:
+            print(f"    → {e.hint}")
+        return 4
     return 0
 
 
@@ -271,6 +281,7 @@ def cmd_setup(args) -> int:
             ok(f"brew shim ready: {os.path.join(brewshim.shadow_dir(), 'brew')}")
         except Exception as e:
             err(f"brew shim: {e}")
+    warn_other_version_managers()
     # 3. profile
     if args.uninstall_profile:
         ok("removed the intelbrew PATH block" if installer.drop_profile()
@@ -295,6 +306,23 @@ def cmd_setup(args) -> int:
     except Exception:
         pass
     return 0
+
+
+def warn_other_version_managers() -> None:
+    """nvm/fnm/asdf also own `node`; say whose shim wins instead of surprising them."""
+    home = os.path.expanduser("~")
+    found = []
+    if os.path.isdir(os.path.join(home, ".nvm")) or shutil.which("nvm"):
+        found.append("nvm (~/.nvm)")
+    if os.path.isdir(os.path.join(home, ".fnm")) or shutil.which("fnm"):
+        found.append("fnm")
+    if os.path.isdir(os.path.join(home, ".asdf")) or shutil.which("asdf"):
+        found.append("asdf")
+    if found:
+        warn(f"also installed: {', '.join(found)} — intelbrew shims in "
+             f"{installer.bin_dir()} come first in PATH while its block is active; "
+             f"run `ibrew setup --uninstall-profile` and let the other manager own "
+             f"`node` if you prefer it")
 
 
 def _wrap_ibrew(path: str) -> None:

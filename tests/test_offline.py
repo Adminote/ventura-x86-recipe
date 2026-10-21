@@ -299,3 +299,82 @@ def test_installing_a_tool_does_not_touch_the_profile(tmp_path, monkeypatch):
 
     body = inspect.getsource(installer.install_archive)
     assert "ensure_profile(" not in body, "install must not write the shell profile"
+
+
+# --------------------------------------------------------------------------- #
+# node runtime fallback (what happens when no binary exists)
+# --------------------------------------------------------------------------- #
+
+def _fake_index(monkeypatch, versions):
+    idx = [{"version": v, "lts": False, "files": ["osx-x64-tar"]} for v in versions]
+    monkeypatch.setattr(sources, "node_index", lambda: idx)
+    monkeypatch.setattr(sources, "node_supported_arch", lambda pf, e: "darwin-x64")
+
+
+def test_unknown_major_is_refused_with_the_available_list(monkeypatch):
+    from intelbrew import nodemgr
+
+    _fake_index(monkeypatch, ["v22.11.0", "v20.18.0"])
+    with pytest.raises(nodemgr.NodeUnavailable) as e:
+        nodemgr.ensure_runtime("99", _pf())
+    assert "no official" in str(e.value)
+    assert "22, 20" in str(e.value)
+    assert e.value.hint.startswith("ibrew node use")
+
+
+def test_newest_that_needs_a_newer_macos_falls_back(monkeypatch):
+    from intelbrew import nodemgr
+
+    _fake_index(monkeypatch, ["v26.1.0", "v22.11.0"])
+
+    def fake_install(cand, pf, force):
+        if cand["version"].startswith("v26"):
+            raise nodemgr._TooNew("build requires macOS 15+ (this machine: macOS 13)")
+        return "/fake/v22.11.0/bin/node"
+
+    monkeypatch.setattr(nodemgr, "_install_candidate", fake_install)
+    assert nodemgr.ensure_runtime(None, _pf()) == "/fake/v22.11.0/bin/node"
+
+
+def test_all_candidates_too_new_reports_why(monkeypatch):
+    from intelbrew import nodemgr
+
+    _fake_index(monkeypatch, ["v26.1.0"])
+
+    def fake_install(cand, pf, force):
+        raise nodemgr._TooNew("build requires macOS 15+")
+
+    monkeypatch.setattr(nodemgr, "_install_candidate", fake_install)
+    with pytest.raises(nodemgr.NodeUnavailable) as e:
+        nodemgr.ensure_runtime(None, _pf())
+    assert "newer macOS" in str(e.value)
+
+
+def test_shims_refuse_to_run_a_missing_runtime(tmp_path, monkeypatch):
+    """A broken target must fail loudly, not fall through to another node."""
+    monkeypatch.setenv("INTELBREW_HOME", str(tmp_path / "ib"))
+    from intelbrew import nodemgr
+
+    node = tmp_path / "ib" / "node" / "v20.0.0" / "bin" / "node"
+    node.parent.mkdir(parents=True)
+    node.write_text("#!/bin/sh\necho fake\n")
+    node.chmod(0o755)
+    cli = tmp_path / "ib" / "node" / "v20.0.0" / "lib" / "node_modules" / "npm" / "bin"
+    cli.mkdir(parents=True)
+    for name in ("npm-cli.js", "npx-cli.js"):
+        (cli / name).write_text("")
+
+    monkeypatch.setattr(nodemgr, "ensure_runtime", lambda major, pf: str(node))
+    nodemgr.write_shims("shim", "20", _pf())
+    for name in ("node", "npm", "npx"):
+        text = (tmp_path / "ib" / "bin" / name).read_text()
+        assert "missing" in text and "ibrew node use" in text, name
+
+    # delete the runtime and check the shim's exit code + message
+    import subprocess
+
+    node.unlink()
+    p = subprocess.run([str(tmp_path / "ib" / "bin" / "node"), "-v"],
+                       capture_output=True, text=True)
+    assert p.returncode == 127
+    assert "managed Node runtime is missing" in p.stderr
