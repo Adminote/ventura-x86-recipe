@@ -52,7 +52,7 @@ macOS 13.7.8 x86_64: bottle tag 'ventura'
 | `ibrew plan <包>…` | 试运行：用哪个源、哪个版本、怎么校验、契约类型 |
 | `ibrew install <包>…` | 按计划安装；**永不编译**；校验摘要 |
 | `ibrew node install/use <大版本>` | 官方 Node.js 构建（多镜像赛跑）+ `node`/`npm`/`npx` 垫片 |
-| `ibrew add <命令> <url> --sha256 …` | 把任意已验证的压缩包变成 recipe，并立即验证 |
+| `ibrew add <命令> <url> --sha256 …` | 把已验证的压缩包（或用 `--raw` 指定裸二进制）变成 recipe，并立即验证 |
 | `ibrew setup --apply` | 一条命令装好：Node 运行时 + 垫片 + `brew` 垫片 + shell 配置 |
 | `ibrew status` / `ibrew env` / `ibrew verify` | 查看状态、shell 集成、单独校验文件 |
 
@@ -70,7 +70,7 @@ $ brew install node            # 实际走 ~/.intelbrew/brew-bin/brew
 ## 3. 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/intelbrew/intelbrew/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Adminote/ventura-x86-recipe/main/install.sh | sh
 # 或在源码目录里：
 ./install.sh --prefix ~/.local
 ibrew doctor          # 装任何东西之前先看这个

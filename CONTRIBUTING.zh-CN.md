@@ -18,7 +18,7 @@
 ## 添加 recipe
 
 ```bash
-git clone https://github.com/intelbrew/intelbrew && cd intelbrew
+git clone https://github.com/Adminote/ventura-x86-recipe && cd ventura-x86-recipe
 export PYTHONPATH=src
 python3 -m intelbrew.cli add <名字> "<官方 url>" --sha256 <hex> --bin <命令> --apply
 git add registry/<名字>.json

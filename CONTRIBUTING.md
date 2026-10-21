@@ -19,7 +19,7 @@ recipe**; the second most valuable is a bug report that includes `ibrew doctor` 
 ## Adding a recipe
 
 ```bash
-git clone https://github.com/intelbrew/intelbrew && cd intelbrew
+git clone https://github.com/Adminote/ventura-x86-recipe && cd ventura-x86-recipe
 export PYTHONPATH=src
 python3 -m intelbrew.cli add <name> "<official url>" --sha256 <hex> --bin <cmd> --apply
 git add registry/<name>.json

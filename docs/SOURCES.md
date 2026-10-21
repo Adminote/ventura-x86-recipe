@@ -20,7 +20,7 @@ exercised. “Tested” means: run end-to-end on an Intel Mac (macOS 13.7, Ventu
 | `conda-forge` | ffmpeg, imagemagick, redis, sqlite, … | different runtime | sha256 from repodata | conda-forge | implemented, partial |
 | `npm-global` | JS tools only (allowlist) | npm CLI | sha1 from registry | none | **tested** |
 
-## Archive formats
+## Payload formats (archives and bare binaries)
 
 | Format | Support | Notes |
 |---|---|---|

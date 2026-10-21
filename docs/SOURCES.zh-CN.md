@@ -19,7 +19,7 @@ intelbrew 获取二进制的全部途径、各自的保证，以及是否真的�
 | `conda-forge` | ffmpeg、imagemagick、redis、sqlite… | 运行时不同 | repodata 的 sha256 | conda-forge | 已实现，部分验证 |
 | `npm-global` | 仅白名单内的 JS 工具 | npm CLI | registry 的 sha1 | 无 | **已实测** |
 
-## 压缩格式
+## 载荷格式（压缩包与裸二进制）
 
 | 格式 | 支持 | 说明 |
 |---|---|---|

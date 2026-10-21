@@ -174,7 +174,7 @@ recipe 是一个**断言**：“这个 URL、这些字节、这种压缩布局�
 ## 9. 在另一台 Intel Mac 上复现
 
 ```bash
-git clone https://github.com/intelbrew/intelbrew && cd intelbrew
+git clone https://github.com/Adminote/ventura-x86-recipe && cd ventura-x86-recipe
 ./install.sh --prefix ~/.local
 ibrew doctor                 # 环境 + 网络 + recipe
 ibrew census                 # 这台机器上什么会编译

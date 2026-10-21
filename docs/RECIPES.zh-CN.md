@@ -41,7 +41,8 @@ recipe 是一份**经过机器验证的断言**：某个配方如何从二进制
 | `sha256` | `archive` **必填**；没有摘要就拒绝安装 |
 | `fmt` | 当 URL **就是**二进制本身（没有压缩包）时写 `"raw"`；tar/zip 省略 |
 | `strip` | 去掉几层顶层目录（1 = 标准 release 包） |
-| `install.bin` | 包内哪些路径变成命令；省略则自动探测 |
+| `bin` | 仅 `"fmt": "raw"` 时用：从这个裸二进制生成哪些命令名 |
+| `install.bin` | 压缩包用：包内哪些路径变成命令；省略则自动探测 |
 | `requires_macos` | 硬下限；低于它直接拒绝该步骤 |
 | `gpg` | `{sig_url, keys_url, fingerprint}`，装了 `gpg` 时校验 |
 | `codesign_team` | 例如 `HX7739G8FX`（Node.js Foundation）；只报告，不强制 |
@@ -61,6 +62,16 @@ ibrew add ripgrep \
 
 `--apply` 会在一次性的 `INTELBREW_HOME` 里跑完整 doctor 流程（下载 → 校验 → 解包 → 安装 →
 执行）。成功后会写回 `verified` 并打印要提交的确切文件。
+
+如果项目直接发**裸二进制**（没有压缩包），加 `--raw` 并指定命令名：
+
+```bash
+ibrew add jq "https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-macos-amd64" \
+  --sha256 e94b266e… --raw --bin jq --version 1.8.2 --apply
+```
+
+GitHub 链接会自动补上 `gh-proxy.com` / `ghfast.top` / `ghproxy.net` 回退镜像——字节相同，
+所以摘要依然能证明它们。
 
 ## 评审清单（PR 用）
 

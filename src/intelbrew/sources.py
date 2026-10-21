@@ -1,7 +1,8 @@
 """Binary *sources*: where an official upstream build of a formula can come from.
 
-A source answers one question: "give me an archive for <formula> that runs on
-this exact machine", together with the integrity data needed to prove it.
+A source answers one question: "give me a *binary* for <formula> that runs on this
+exact machine" — an archive to unpack, or a single executable release asset —
+together with the integrity data needed to prove it.
 
 Order for a brew request (planner.py):
     1. registry (pre-registered steps written by `ibrew add`)

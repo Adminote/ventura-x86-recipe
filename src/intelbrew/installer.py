@@ -1,4 +1,4 @@
-"""Step execution: download → verify → extract → install → verify.
+"""Step execution: download → verify → extract (or copy a raw binary) → install → verify.
 
 Safety rules
 ------------

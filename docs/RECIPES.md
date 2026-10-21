@@ -42,7 +42,8 @@ to touch.
 | `sha256` | **required** for `archive`; the install is refused without it |
 | `fmt` | `"raw"` when the URL *is* the binary (no archive); omit for tarballs/zips |
 | `strip` | number of leading directories to drop (1 = classic release tarball) |
-| `install.bin` | paths inside the archive that become commands; omit to auto-detect |
+| `bin` | only for `"fmt": "raw"`: command name(s) to create from the single binary |
+| `install.bin` | for archives: paths inside the archive that become commands; omit to auto-detect |
 | `requires_macos` | hard floor; the step is refused below it |
 | `gpg` | `{sig_url, keys_url, fingerprint}` — verified when `gpg` is installed |
 | `codesign_team` | e.g. `HX7739G8FX` (Node.js Foundation); reported, not enforced |
@@ -63,6 +64,16 @@ ibrew add ripgrep \
 `--apply` runs the full doctor pipeline (download → verify → extract → install → execute)
 in a throw-away `INTELBREW_HOME`. Success writes `verified` into the recipe and prints the
 exact file to commit.
+
+For a project that ships a **bare binary** (no archive), add `--raw` and name the command:
+
+```bash
+ibrew add jq "https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-macos-amd64" \
+  --sha256 e94b266e… --raw --bin jq --version 1.8.2 --apply
+```
+
+GitHub URLs automatically get `gh-proxy.com` / `ghfast.top` / `ghproxy.net` fallbacks —
+identical bytes, so the digest still proves them.
 
 ## Review checklist (for PRs)
 

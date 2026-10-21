@@ -55,7 +55,7 @@ Two things make this worse and are handled here:
 | `ibrew plan <pkg>…` | Dry run: which source, which version, which verification, which contract |
 | `ibrew install <pkg>…` | Installs from the plan; **never compiles**; digest-verified |
 | `ibrew node install/use <major>` | Official Node.js build (mirror-raced), plus `node`/`npm`/`npx` shims |
-| `ibrew add <cmd> <url> --sha256 …` | Turns any verified archive into a recipe, validated immediately |
+| `ibrew add <cmd> <url> --sha256 …` | Turns a verified archive (or a bare binary with `--raw`) into a recipe, validated immediately |
 | `ibrew setup --apply` | One-shot: Node runtime + shims + `brew` shim + shell profile |
 | `ibrew status` / `ibrew env` / `ibrew verify` | Inspect, shell integration, standalone integrity report |
 
@@ -74,7 +74,7 @@ are passed through to the real `brew` untouched.
 ## 3. Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/intelbrew/intelbrew/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Adminote/ventura-x86-recipe/main/install.sh | sh
 # or from a checkout:
 ./install.sh --prefix ~/.local
 ibrew doctor          # read this before installing anything

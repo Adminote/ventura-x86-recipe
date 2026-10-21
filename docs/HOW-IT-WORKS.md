@@ -178,7 +178,7 @@ truth. CI runs this on macOS runners for the Intel matrix.
 ## 9. Reproducing this on another Intel Mac
 
 ```bash
-git clone https://github.com/intelbrew/intelbrew && cd intelbrew
+git clone https://github.com/Adminote/ventura-x86-recipe && cd ventura-x86-recipe
 ./install.sh --prefix ~/.local
 ibrew doctor                 # environment + network + recipes
 ibrew census                 # what would compile here

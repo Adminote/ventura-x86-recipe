@@ -33,7 +33,7 @@ from typing import Dict, List, Optional, Tuple
 from . import __version__
 from .util import err, info, warn
 
-UA = f"intelbrew/{__version__} (+https://github.com/intelbrew/intelbrew)"
+UA = f"intelbrew/{__version__} (+https://github.com/Adminote/ventura-x86-recipe)"
 GITHUB_PROXIES = [
     "https://gh-proxy.com/",
     "https://ghfast.top/",

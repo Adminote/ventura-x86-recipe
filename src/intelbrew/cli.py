@@ -4,7 +4,7 @@
   status [--json]                   what would happen to `brew install <x>` here
   plan <formula>…                   dry run: which source/version/verification
   install <formula>…                install via the plan (never compiles)
-  add <cmd> <url> --sha256 …        turn any verified archive into a recipe
+  add <cmd> <url> --sha256 …        turn a verified archive (or --raw binary) into a recipe
   node install|use|list|status      official prebuilt Node (also writes node/npm/npx shims)
   npm  <args>… / npx <args>…        run npm/npx on the managed Node runtime
   env                              print shell integration
@@ -173,7 +173,7 @@ def cmd_install(args) -> int:
 
 
 def cmd_add(args) -> int:
-    """Turn an arbitrary official archive into a recipe (the 'discovery' step)."""
+    """Turn an official archive — or a bare binary with --raw — into a recipe."""
     pf = _pf(args)
     digest = args.sha256 or ""
     if not digest:
@@ -184,14 +184,27 @@ def cmd_add(args) -> int:
     steps = []
     if args.from_file:
         digest = net.file_digest(args.from_file, "sha256")
-    steps.append({
-        "kind": "archive", "source": "github-release" if "github.com" in args.url else "manual",
-        "url": args.url, "sha256": digest, "fmt": "",
-        "install": {"bin": args.bin or []},
-        "strip": 0 if args.no_strip else 1,
-        "requires_macos": args.requires_macos,
-        "gpg": None, "codesign_team": args.codesign_team,
-    })
+    raw = bool(args.raw)
+    step = {
+        "kind": "archive",
+        "source": "github-release" if "github.com" in args.url else "manual",
+        "url": args.url,
+        "sha256": digest,
+    }
+    if "github.com" in args.url:
+        # same bytes through the CN proxies; the digest keeps them interchangeable
+        step["fallback_urls"] = [p + args.url for p in net.GITHUB_PROXIES]
+    if raw:
+        step["fmt"] = "raw"
+        step["bin"] = args.bin or [name]
+    else:
+        step["strip"] = 0 if args.no_strip else 1
+        step["install"] = {"bin": args.bin or []}
+    if args.requires_macos:
+        step["requires_macos"] = args.requires_macos
+    if args.codesign_team:
+        step["codesign_team"] = args.codesign_team
+    steps.append(step)
     r = registry.Recipe(name=name, version=args.version or "", steps=steps,
                         requires={"macos": f">={args.requires_macos}"} if args.requires_macos else {})
     p = registry.save(r)
@@ -349,13 +362,16 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--allow-unverified", action="store_true")
     i.set_defaults(func=cmd_install)
 
-    a = sub.add_parser("add", help="create a recipe from a verified archive")
+    a = sub.add_parser("add", help="create a recipe from a verified archive or single binary")
     a.add_argument("formula")
     a.add_argument("url")
     a.add_argument("--sha256", default="")
     a.add_argument("--from-file", default="")
     a.add_argument("--version", default="")
-    a.add_argument("--bin", action="append", help="path inside the archive (repeatable)")
+    a.add_argument("--bin", action="append",
+                   help="path inside the archive, or the command name with --raw (repeatable)")
+    a.add_argument("--raw", action="store_true",
+                   help="the URL is the binary itself, not an archive (e.g. jq-macos-amd64)")
     a.add_argument("--no-strip", action="store_true", help="archive has no top-level directory")
     a.add_argument("--requires-macos", type=int, default=0)
     a.add_argument("--codesign-team", default="")
