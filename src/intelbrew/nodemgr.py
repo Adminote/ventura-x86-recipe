@@ -13,11 +13,11 @@ keep working after Homebrew drops Intel bottles.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import re
 import shutil
-import sys
-from typing import Dict, List, Optional, Tuple
 
 from . import archive, net, sources, verify
 from .util import PlatformInfo, current_platform, err, info, ok, run, warn
@@ -45,12 +45,12 @@ def current_exe() -> str:
     return w or ""
 
 
-def majors_installed() -> List[str]:
+def majors_installed() -> list[str]:
     d = runtime_root()
     return sorted(os.listdir(d)) if os.path.isdir(d) else []
 
 
-def candidates(pf: PlatformInfo, ceiling: Optional[int] = None) -> List[dict]:
+def candidates(pf: PlatformInfo, ceiling: int | None = None) -> list[dict]:
     """Official releases with a darwin-<arch> build, newest first."""
     idx = sources.node_index()
     out = []
@@ -66,7 +66,7 @@ def candidates(pf: PlatformInfo, ceiling: Optional[int] = None) -> List[dict]:
     return out
 
 
-def _minos(path: str) -> Optional[int]:
+def _minos(path: str) -> int | None:
     """Minimum macOS major declared by a Mach-O binary (None if unknown)."""
     otool = shutil.which("otool") or "/usr/bin/otool"
     if not os.path.exists(otool):
@@ -76,7 +76,7 @@ def _minos(path: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def ensure_runtime(major: Optional[str], pf: Optional[PlatformInfo] = None,
+def ensure_runtime(major: str | None, pf: PlatformInfo | None = None,
                    force: bool = False) -> str:
     """Install (if needed) and return the node binary of ``major``.
 
@@ -164,8 +164,8 @@ exec "{node}" "{cli}" "$@"
 """
 
 
-def write_shims(kind: str = "shim", major: Optional[str] = None,
-                pf: Optional[PlatformInfo] = None) -> List[str]:
+def write_shims(kind: str = "shim", major: str | None = None,
+                pf: PlatformInfo | None = None) -> list[str]:
     """Write ``node`` (+ npm/npx) into ``~/.intelbrew/bin``.
 
     ``node`` is a symlink to the official binary; ``npm``/``npx`` are 3-line
@@ -210,18 +210,16 @@ CLI_NAME = {"npm": "npm-cli.js", "npx": "npx-cli.js"}
 LEGACY_MAJOR = 18          # last Node.js line whose installer we still trust on old macOS
 
 
-def _npm_cli_prefix(node: str) -> Tuple[str, str, str]:
+def _npm_cli_prefix(node: str) -> tuple[str, str, str]:
     prefix = os.path.dirname(os.path.dirname(node))
     pkg = os.path.join(prefix, "lib", "node_modules", "npm", "package.json")
     ver = "0.0.0"
-    try:
-        ver = json.load(open(pkg, encoding="utf-8")).get("version", ver)
-    except Exception:
-        pass
+    with contextlib.suppress(OSError, ValueError), open(pkg, encoding="utf-8") as fh:
+        ver = json.load(fh).get("version", ver)
     return prefix, os.path.join(prefix, "lib", "node_modules", "npm", "bin"), ver
 
 
-def run_runtime(kind: str, major: Optional[str], args: List[str]) -> int:
+def run_runtime(kind: str, major: str | None, args: list[str]) -> int:
     pf = None
     from .util import current_platform
 
@@ -232,7 +230,7 @@ def run_runtime(kind: str, major: Optional[str], args: List[str]) -> int:
         err(f"node runtime unavailable: {e}")
         return 1
     if kind == "node":
-        os.execv(node, [node] + args)
+        os.execv(node, [node, *args])
     # explicit `ibrew npm …` on hosts where the shims are not on PATH yet
     prefix, bindir, npm_ver = _npm_cli_prefix(node)
     major = int(os.path.basename(prefix).split(".")[0].lstrip("v"))
@@ -247,16 +245,16 @@ def run_runtime(kind: str, major: Optional[str], args: List[str]) -> int:
     if not os.path.isfile(cli):
         err(f"{kind} is missing from this node build; run `ibrew setup --apply` to reinstall")
         return 1
-    os.execve(node, [node, cli] + args, env)
+    os.execve(node, [node, cli, *args], env)
     return 0  # unreachable
 
 
-def _ver(v: str) -> Tuple[int, int]:
+def _ver(v: str) -> tuple[int, int]:
     m = re.match(r"(\d+)\.(\d+)", (v or "").strip())
     return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
 
-def shim_status() -> Dict[str, str]:
+def shim_status() -> dict[str, str]:
     bdir = os.path.join(net.home(), "bin")
     out = {}
     for name in ("node", "npm", "npx"):

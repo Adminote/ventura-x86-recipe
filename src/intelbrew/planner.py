@@ -10,10 +10,7 @@ Order (first hit wins):
 
 from __future__ import annotations
 
-import os
-import re
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
 
 from . import brew, net, registry, sources
 from .util import PlatformInfo, warn
@@ -28,7 +25,7 @@ class Resolved:
     confidence: str = "none"  # verified | probable | heuristic | none
     url: str = ""
     detail: str = ""
-    steps: List[dict] = field(default_factory=list)
+    steps: list[dict] = field(default_factory=list)
     blocked: str = ""
 
     @property
@@ -43,7 +40,7 @@ class Resolved:
 
 # --------------------------------------------------------------------------- #
 
-def parse_request(token: str) -> Tuple[str, str]:
+def parse_request(token: str) -> tuple[str, str]:
     """``node@22`` → ("node", "22"); ``brew-node`` → ("node", "")."""
     tok = token.strip()
     if tok.startswith("brew-"):
@@ -87,7 +84,7 @@ def candidate_to_step(cand: sources.Candidate, formula: str) -> dict:
 # upstream shortcut chain
 # --------------------------------------------------------------------------- #
 
-def _try(fn, *args, **kwargs) -> Optional[sources.Candidate]:
+def _try(fn, *args, **kwargs) -> sources.Candidate | None:
     try:
         return fn(*args, **kwargs)
     except net.RateLimited:
@@ -97,7 +94,7 @@ def _try(fn, *args, **kwargs) -> Optional[sources.Candidate]:
         return None
 
 
-def upstream(tool: str, pf: PlatformInfo, name: str, version: str = "") -> Optional[sources.Candidate]:
+def upstream(tool: str, pf: PlatformInfo, name: str, version: str = "") -> sources.Candidate | None:
     ver = version or ""
     if tool == "node":
         return _try(sources.node_dist, ver or "24", pf, "lts")
@@ -239,7 +236,7 @@ def resolve(name: str, pf: PlatformInfo, version: str = "") -> Resolved:
                             "`ibrew add <cmd> <url> --sha256 …`")
 
 
-def resolve_many(names: List[str], pf: PlatformInfo) -> List[Resolved]:
+def resolve_many(names: list[str], pf: PlatformInfo) -> list[Resolved]:
     out = []
     for tok in names:
         n, v = parse_request(tok)

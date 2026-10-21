@@ -17,13 +17,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
-from typing import List, Optional
 
 from . import __version__, brew, brewshim, doctor, installer, net, nodemgr, planner, registry
 from .util import PlatformInfo, current_platform, err, info, ok, warn
-
 
 # --------------------------------------------------------------------------- #
 # helpers
@@ -33,14 +30,14 @@ def _pf(args) -> PlatformInfo:
     return current_platform()
 
 
-def _table(rows: List[List[str]]) -> str:
+def _table(rows: list[list[str]]) -> str:
     if not rows:
         return ""
     widths = [max(len(str(r[i])) for r in rows) for i in range(len(rows[0]))]
     return "\n".join("  ".join(str(c).ljust(w) for c, w in zip(r, widths)).rstrip() for r in rows)
 
 
-def _print_checks(checks: List[doctor.Check]) -> int:
+def _print_checks(checks: list[doctor.Check]) -> int:
     bad = 0
     for c in checks:
         print(f"  {c.flag()} {c.name:28} {c.detail}")
@@ -58,7 +55,7 @@ def _print_checks(checks: List[doctor.Check]) -> int:
 def cmd_doctor(args) -> int:
     pf = _pf(args)
     info(f"intelbrew {__version__} — validating on {pf.pretty_name} {pf.machine} ({pf.arch})")
-    checks: List[doctor.Check] = [doctor.check_platform(pf)]
+    checks: list[doctor.Check] = [doctor.check_platform(pf)]
     checks += doctor.check_brew(pf)
     checks.append(doctor.check_cellar_writable())
     checks += doctor.check_toolchain()
@@ -176,10 +173,9 @@ def cmd_add(args) -> int:
     """Turn an official archive — or a bare binary with --raw — into a recipe."""
     pf = _pf(args)
     digest = args.sha256 or ""
-    if not digest:
-        if not args.from_file:
-            err("--sha256 is required (or --from-file to compute it from a local copy)")
-            return 2
+    if not digest and not args.from_file:
+        err("--sha256 is required (or --from-file to compute it from a local copy)")
+        return 2
     name = args.formula
     steps = []
     if args.from_file:
@@ -273,7 +269,7 @@ def cmd_setup(args) -> int:
     if args.apply:
         changed = installer.ensure_profile()
         ok(f"profile {'updated' if changed else 'already set'}: {installer.profile_path()}")
-        print(f'    open a new shell (or run: eval "$(ibrew env)")')
+        print('    open a new shell (or run: eval "$(ibrew env)")')
     else:
         print("    dry run: add --apply to update your shell profile")
     # 4. census line
@@ -429,8 +425,12 @@ def _cmd_runtime(args) -> int:
     return nodemgr.run_runtime(args.kind, args.major or None, rest)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    # `npm`/`npx` pass their own flags through untouched (`-v`, `--version`, …):
+    # argparse would reject them, so hand off before parsing.
+    if argv and argv[0] in ("npm", "npx"):
+        return nodemgr.run_runtime(argv[0], os.environ.get("IBREW_MAJOR"), argv[1:])
     # `ibrew brew <args>` and `ibrew <brew-verb> <args>` both drive the brew shim
     if argv and argv[0] == "brew":
         argv = argv[1:]

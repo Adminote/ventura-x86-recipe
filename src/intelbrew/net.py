@@ -12,12 +12,11 @@ Design rules
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
-import threading
 import re
-import shutil
 import shutil
 import ssl
 import subprocess
@@ -27,11 +26,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
 
 from . import __version__
-from .util import err, info, warn
+from .util import info, warn
 
 UA = f"intelbrew/{__version__} (+https://github.com/Adminote/ventura-x86-recipe)"
 GITHUB_PROXIES = [
@@ -57,17 +55,13 @@ def _ssl_context() -> ssl.SSLContext:
         ctx.load_verify_locations(certifi.where())
     except Exception:
         pass
-    try:
+    with contextlib.suppress(Exception):
         ctx.load_default_certs()
-    except Exception:
-        pass
     # macOS system keychain as the last resort
     for ca_bundle in ("/etc/ssl/cert.pem",):
         if os.path.exists(ca_bundle):
-            try:
+            with contextlib.suppress(Exception):
                 ctx.load_verify_locations(ca_bundle)
-            except Exception:
-                pass
     return ctx
 
 
@@ -119,7 +113,7 @@ def _ttl_fresh(path: str, ttl: int) -> bool:
 # --------------------------------------------------------------------------- #
 
 def request(url: str, *, timeout: float = DEFAULT_TIMEOUT, retries: int = DEFAULT_RETRIES,
-            headers: Optional[Dict[str, str]] = None) -> Fetch:
+            headers: dict[str, str] | None = None) -> Fetch:
     if OFFLINE:
         return Fetch(False, url, error="offline mode")
     hdrs = {"User-Agent": UA, "Accept-Encoding": "identity"}
@@ -143,7 +137,7 @@ def request(url: str, *, timeout: float = DEFAULT_TIMEOUT, retries: int = DEFAUL
     return Fetch(False, url, 0, error=last)
 
 
-def guard(host_probe: str = "https://example.com/", timeout: float = 15) -> Tuple[bool, str]:
+def guard(host_probe: str = "https://example.com/", timeout: float = 15) -> tuple[bool, str]:
     """One-shot connectivity probe so we can fail fast with a good message."""
     r = request(host_probe, timeout=timeout, retries=0)
     if r.ok:
@@ -152,20 +146,20 @@ def guard(host_probe: str = "https://example.com/", timeout: float = 15) -> Tupl
 
 
 def download(url: str, dest: str, *, digest: str = "", algo: str = "sha256",
-             size: Optional[int] = None, timeout: float = 300,
+             size: int | None = None, timeout: float = 300,
              retries: int = 1, show: bool = True,
-             headers: Optional[Dict[str, str]] = None) -> Fetch:
+             headers: dict[str, str] | None = None) -> Fetch:
     """Download a single URL to ``dest`` atomically, verifying digest/size."""
     r, _ = download_race([url], dest, digest=digest, algo=algo, show=show,
                          headers=headers, race=False, timeout=timeout)
     return r
 
 
-def download_race(urls: List[str], dest: str, *, digest: str = "", algo: str = "sha256",
+def download_race(urls: list[str], dest: str, *, digest: str = "", algo: str = "sha256",
                   timeout: float = 0, show: bool = True,
-                  headers: Optional[Dict[str, str]] = None,
+                  headers: dict[str, str] | None = None,
                   stall_timeout: float = 30,
-                  race: bool = True) -> Tuple[Fetch, List[tuple]]:
+                  race: bool = True) -> tuple[Fetch, list[tuple]]:
     """Fetch identical bytes from several mirrors concurrently; the fastest wins.
 
     Uses ``curl`` when available (Homebrew does the same: it is fast, resumes,
@@ -185,21 +179,19 @@ def download_race(urls: List[str], dest: str, *, digest: str = "", algo: str = "
         return _download_urllib(urls, dest, digest, algo, total, show, headers, race)
 
     sandbox = tempfile.mkdtemp(prefix="ibrew-dl-")
-    procs: List[Tuple[str, subprocess.Popen, str]] = []
-    hdr_args: List[str] = []
+    procs: list[tuple[str, subprocess.Popen, str]] = []
+    hdr_args: list[str] = []
     for k, v in (headers or {}).items():
         hdr_args += ["-H", f"{k}: {v}"]
     for i, u in enumerate(urls if race else urls[:1]):
         out = os.path.join(sandbox, f"{i}.part")
-        cmd = ["curl", "-fsSL", "--http1.1", "--retry", "2", "--connect-timeout", "15",
-               "--max-time", str(int(total)), "--speed-limit", "2048",
-               "--speed-time", str(int(stall_timeout)), "-A", UA] + hdr_args + ["-o", out, u]
+        cmd = ["curl", "-fsSL", "--http1.1", "--retry", "2", "--connect-timeout", "15", "--max-time", str(int(total)), "--speed-limit", "2048", "--speed-time", str(int(stall_timeout)), "-A", UA, *hdr_args, "-o", out, u]
         procs.append((u, subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                                           stderr=subprocess.PIPE), out))
     if show:
         info(f"downloading {os.path.basename(dest)} from {len(procs)} mirror(s)…")
     t0 = time.time()
-    winner: Optional[Tuple[str, str]] = None
+    winner: tuple[str, str] | None = None
     while procs:
         alive = False
         for u, p, out in list(procs):
@@ -222,11 +214,9 @@ def download_race(urls: List[str], dest: str, *, digest: str = "", algo: str = "
         if time.time() - t0 > total:
             break
         time.sleep(0.15)
-    for u, p, out in procs:            # slower mirrors: stop them
-        try:
-            p.kill()
-        except Exception:
-            pass
+    for _, proc, _ in procs:           # slower mirrors: stop them
+        with contextlib.suppress(OSError):
+            proc.kill()
     results = []
     if winner:
         os.replace(winner[1], dest)
@@ -242,7 +232,7 @@ def download_race(urls: List[str], dest: str, *, digest: str = "", algo: str = "
     return res, results
 
 
-def _download_urllib(urls, dest, digest, algo, total, show, headers, race) -> Tuple[Fetch, List[tuple]]:
+def _download_urllib(urls, dest, digest, algo, total, show, headers, race) -> tuple[Fetch, list[tuple]]:
     """Fallback downloader (no curl). One URL at a time, hard overall deadline."""
     errs = []
     tmp = dest + ".part"
@@ -257,7 +247,7 @@ def _download_urllib(urls, dest, digest, algo, total, show, headers, race) -> Tu
                     open(tmp, "wb") as out:
                 clen = int(resp.headers.get("Content-Length") or 0)
                 done = 0
-                last = time.time()
+                time.time()
                 while True:
                     if time.time() - t0 > total:
                         raise TimeoutError("overall deadline")
@@ -266,7 +256,7 @@ def _download_urllib(urls, dest, digest, algo, total, show, headers, race) -> Tu
                         break
                     out.write(chunk)
                     done += len(chunk)
-                    last = time.time()
+                    time.time()
                     if show and sys.stderr.isatty() and clen:
                         sys.stderr.write(f"\r    {done * 100 // clen:3d}%  "
                                          f"{done / 1e6:.1f}/{clen / 1e6:.1f} MB")
@@ -290,7 +280,7 @@ def _download_urllib(urls, dest, digest, algo, total, show, headers, race) -> Tu
     return Fetch(False, urls[0] if urls else "", error="; ".join(errs)[:300]), []
 
 
-def _verify(path: str, digest: str, algo: str, size: Optional[int]) -> bool:
+def _verify(path: str, digest: str, algo: str, size: int | None) -> bool:
     if size is not None and os.path.getsize(path) != size:
         return False
     if not digest:
@@ -330,7 +320,7 @@ def github_url(url: str) -> str:
     return url
 
 
-def github_json(path: str, ttl: int = 1800, tokened: bool = True) -> Optional[dict]:
+def github_json(path: str, ttl: int = 1800, tokened: bool = True) -> dict | None:
     """Fetch ``api.github.com/<path>`` with caching and an optional token.
 
     Raises :class:`RateLimited` when GitHub answers 403/429 without a token so
@@ -384,7 +374,7 @@ def _gh_token() -> str:
 # Mirror lists (override everything with INTELBREW_<X>_MIRRORS, comma separated)
 # --------------------------------------------------------------------------- #
 
-def _mirrors(env: str, defaults: List[str]) -> List[str]:
+def _mirrors(env: str, defaults: list[str]) -> list[str]:
     val = os.environ.get(env)
     if val:
         return [v.strip().rstrip("/") for v in val.split(",") if v.strip()]
@@ -417,7 +407,7 @@ CONDA_MIRRORS = lambda: _mirrors("IBREW_CONDA_MIRRORS", [  # noqa: E731
 ])
 
 
-def try_first(urls: List[str], *, timeout: float = DEFAULT_TIMEOUT) -> Optional[Fetch]:
+def try_first(urls: list[str], *, timeout: float = DEFAULT_TIMEOUT) -> Fetch | None:
     """Return the first successful fetch from an ordered mirror list."""
     for u in urls:
         r = request(u, timeout=timeout)
@@ -426,7 +416,7 @@ def try_first(urls: List[str], *, timeout: float = DEFAULT_TIMEOUT) -> Optional[
     return None
 
 
-def dedupe(seq: List[str]) -> List[str]:
+def dedupe(seq: list[str]) -> list[str]:
     seen, out = set(), []
     for s in seq:
         if s not in seen:

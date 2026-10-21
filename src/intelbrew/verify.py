@@ -16,7 +16,6 @@ import os
 import re
 import shutil
 from dataclasses import dataclass
-from typing import Optional
 
 from .util import run
 
@@ -40,8 +39,8 @@ def gpg_available() -> bool:
     return shutil.which("gpg") is not None
 
 
-def gpg_verify(data_file: str, sig_file: Optional[str] = None,
-               auto: bool = False, keyring: Optional[str] = None) -> Optional[str]:
+def gpg_verify(data_file: str, sig_file: str | None = None,
+               auto: bool = False, keyring: str | None = None) -> str | None:
     """Verify a detached/auto signature; return the signer fingerprint or None."""
     if not gpg_available():
         return None
@@ -59,7 +58,7 @@ def gpg_verify(data_file: str, sig_file: Optional[str] = None,
     return m.group(1).upper() if m else None
 
 
-def import_keys(key_url: str, token: str = "", keyring: Optional[str] = None) -> bool:
+def import_keys(key_url: str, token: str = "", keyring: str | None = None) -> bool:
     from . import net
 
     r = net.request(key_url, headers={"Authorization": f"Bearer {token}"} if token else None,
@@ -75,7 +74,7 @@ def import_keys(key_url: str, token: str = "", keyring: Optional[str] = None) ->
     return p.returncode == 0
 
 
-def codesign_team(path: str) -> Optional[str]:
+def codesign_team(path: str) -> str | None:
     """Return the TeamIdentifier of a Mach-O binary, or None."""
     if not shutil.which("codesign"):
         return None
@@ -116,7 +115,7 @@ def ensure_trusted_level(integrity: str, provenance: str, notes: list) -> str:
     return "digest-only"
 
 
-def first_binary(directory: str) -> Optional[str]:
+def first_binary(directory: str) -> str | None:
     """First executable Mach-O directly inside ``directory`` (for signature checks)."""
     try:
         for name in sorted(os.listdir(directory)):

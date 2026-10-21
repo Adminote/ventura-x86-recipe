@@ -19,7 +19,6 @@ import stat
 import sys
 import tarfile
 import zipfile
-from typing import Optional
 
 from .util import Unsupported, run, warn
 
@@ -48,7 +47,7 @@ def kind(path: str) -> str:
 
 def _safe_rel(name: str) -> str:
     norm = os.path.normpath(name).replace("\\", "/")
-    if norm.startswith("/") or norm.startswith("..") or norm == ".":
+    if norm.startswith(("/", "..")) or norm == ".":
         raise UnsafeArchive(f"unsafe path in archive: {name!r}")
     return norm
 
@@ -60,19 +59,6 @@ def _check_target(root: str, rel: str) -> str:
     if not (real_target == real_root or real_target.startswith(real_root + os.sep)):
         raise UnsafeArchive(f"path escapes destination: {rel!r}")
     return target
-
-
-def extract_zstd_pyarchive(archive: str, dest: str) -> None:
-    try:
-        import zstandard  # type: ignore
-    except ImportError:
-        raise Unsupported("tar.zst needs python 'zstandard' (pip install zstandard)")
-    import io
-
-    dctx = zstandard.ZstdDecompressor()
-    with open(archive, "rb") as fh, dctx.stream_reader(fh) as reader:
-        with tarfile.open(fileobj=io.BufferedReader(reader, 1 << 20), mode="r|") as tf:  # type: ignore
-            _extract_tar(tf, dest)
 
 
 def _extract_tar(tf: tarfile.TarFile, dest: str) -> None:
@@ -166,15 +152,15 @@ def _extract_zstd(archive: str, dest: str) -> None:
         return
     try:
         import zstandard  # type: ignore
-    except ImportError:
+    except ImportError as e:
         raise Unsupported("tar.zst needs the python package 'zstandard' "
-                          "(pip install zstandard) or Python >= 3.14")
+                          "(pip install zstandard) or Python >= 3.14") from e
     import io
 
-    with open(archive, "rb") as fh:
-        with zstandard.ZstdDecompressor().stream_reader(fh) as reader:
-            with tarfile.open(fileobj=io.BufferedReader(reader, 1 << 20), mode="r|") as tf:  # type: ignore
-                _extract_tar(tf, dest)
+    with open(archive, "rb") as fh, \
+            zstandard.ZstdDecompressor().stream_reader(fh) as reader, \
+            tarfile.open(fileobj=io.BufferedReader(reader, 1 << 20), mode="r|") as tf:
+        _extract_tar(tf, dest)
 
 
 def flatten_root(path: str) -> str:
