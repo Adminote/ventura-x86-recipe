@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, "fix/**", "feat/**", "docs/**", "registry/**"]
   pull_request:
   workflow_dispatch:
   schedule:
