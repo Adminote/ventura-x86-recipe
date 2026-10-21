@@ -61,6 +61,25 @@ They never fall through to whatever `node` happens to be next on PATH (that woul
 run the wrong version with the wrong npm). `ibrew doctor` reports each broken shim, and
 `ibrew node list` does too.
 
+**`npx foo` failed — does intelbrew step in?**
+No. `npx`/`npm` resolve packages from the npm registry only; they never consult recipes or
+Homebrew. Use `ibrew why foo` to see all the routes at once:
+
+```console
+$ ibrew why cowsay
+cowsay  on macOS 13.7.8 x86_64
+
+  • npm: 1.6.0 is pure JavaScript → `npx cowsay` works
+
+$ ibrew why htop
+  • npm: the package named 'htop' exposes no command (handle-to-promise) — most likely
+    unrelated; do not rely on `npx htop`
+  brew    formula=yes  version=3.5.3  bottle(ventura)=no
+```
+
+It also distinguishes “npm package compiles on install” (needs a toolchain and system
+headers) from “ships platform binaries” (`sharp`, `esbuild`).
+
 **I already use nvm / fnm / asdf — will this fight with them?**
 While intelbrew's PATH block is active its shims win (`~/.intelbrew/bin` comes first).
 `ibrew setup --apply` warns when it detects another version manager. Run

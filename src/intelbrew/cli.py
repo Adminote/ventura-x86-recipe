@@ -9,6 +9,7 @@
   npm  <args>… / npx <args>…        run npm/npx on the managed Node runtime
   env                              print shell integration
   setup [--apply]                   one-shot: shims + node + recipe stubs
+  why <name>                        explain where a command/package can come from here
   verify <file> --sha256 …          integrity report for anything you downloaded
 """
 
@@ -338,6 +339,16 @@ def _wrap_ibrew(path: str) -> None:
     os.chmod(path, 0o755)
 
 
+def cmd_why(args) -> int:
+    from . import why
+
+    pf = _pf(args)
+    data = why.analyze(args.name, pf)
+    print(why.render(data, as_json=args.json))
+    return 0 if data["recipe"]["exists"] or data["brew"]["exists"] \
+        or data["npm"].get("exists") else 3
+
+
 def cmd_verify(args) -> int:
     from . import verify as vf
 
@@ -447,6 +458,11 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--uninstall-profile", action="store_true",
                     help="remove the intelbrew PATH block from your shell profile")
     st.set_defaults(func=cmd_setup)
+
+    w = sub.add_parser("why", help="why is this package/command available (or not) here?")
+    w.add_argument("name")
+    w.add_argument("--json", action="store_true")
+    w.set_defaults(func=cmd_why)
 
     v = sub.add_parser("verify", help="integrity report for a local file")
     v.add_argument("file")
