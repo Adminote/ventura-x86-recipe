@@ -298,11 +298,14 @@ def cmd_setup(args) -> int:
             print("    then verify:      ibrew doctor")
     else:
         print(f"    dry run: add --apply to write the PATH block into {installer.profile_path()}")
-    # 4. census line
+    # 4. census line — never downloads the 32 MB index here
     try:
-        c = brew.census(pf)
-        print(f"    Homebrew here: {len(c.binary)}/{c.total} formulas have a native bottle "
-              f"({c.binary_pct:.1f}%); the rest would compile — routes: `ibrew plan <name>`")
+        c = brew.census(pf, fetch=False)
+        if c.total:
+            print(f"    Homebrew here: {len(c.binary)}/{c.total} formulas have a native bottle "
+                  f"({c.binary_pct:.1f}%); the rest would compile — routes: `ibrew plan <name>`")
+        else:
+            print("    (formula index not cached; `ibrew census` downloads ~32 MB once)")
     except Exception:
         pass
     return 0
