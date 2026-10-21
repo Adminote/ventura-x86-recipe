@@ -506,6 +506,19 @@ def test_why_verdict_warns_about_unrelated_npm_package():
     assert "works" not in lines
 
 
+def test_why_verdict_calls_a_binless_package_a_library():
+    data = {"query": "sharp", "platform": "macOS 13",
+            "on_path": {"path": "", "managed": False, "version": ""},
+            "brew": {"exists": False, "version": "", "native_bottle": False,
+                     "tag": "ventura", "deprecated": False, "disabled": False},
+            "recipe": {"exists": False}, "plan": {"ok": False, "how": "none"},
+            "npm": {"exists": True, "version": "0.35.5", "kind": "prebuilt",
+                    "bin": [], "description": "image processing"}}
+    text = " ".join(why_verdict(data))
+    assert "is a library" in text
+    assert "unrelated" not in text
+
+
 def why_verdict(data):
     from intelbrew import why
 
