@@ -115,7 +115,22 @@ Homebrew 只在你想用 `brew` 垫片时才需要。
 校验分三级，如实报告：`unverified`（默认拒绝）、`digest-only`（只有摘要）、
 `verified`（摘要 **且** GPG/Apple 签名）。
 
-## 5. 边界——它**不做**什么
+## 5. 进度与“是否卡住”
+
+每个命令都会说明自己在干什么。耗时步骤（配方索引、多镜像赛跑、Homebrew API 查询、recipe 验证）
+会先打印一行开始信息，在终端里显示带秒数的转圈，结束时打印 `✓ … 4.2s`：
+
+```console
+$ ibrew plan jq git
+==> resolving 2 formula(s) for macOS 13.7.8  [0.2s]
+==> looking up jq in the Homebrew API (formulae.brew.sh) …
+  ✓ looking up jq in the Homebrew API (formulae.brew.sh)  3.4s
+```
+
+不会再出现“几分钟毫无输出、不知道是慢还是死了”的情况。`IBREW_NO_PROGRESS=1` 可关闭转圈
+（管道/CI 本来就只会看到开始和结束两行）。
+
+## 6. 边界——它**不做**什么
 
 * **不是 Homebrew 的 fork，也不是一个包宇宙。** 它只做“路由到官方上游构建 + Homebrew
   bottle”，不搭建私有 bottle 服务器。
@@ -132,7 +147,7 @@ Homebrew 只在你想用 `brew` 垫片时才需要。
 
 完整边界见 [docs/LIMITATIONS.zh-CN.md](docs/LIMITATIONS.zh-CN.md)。
 
-## 6. 覆盖矩阵
+## 7. 覆盖矩阵
 
 完整矩阵（源 × 契约 × 校验 × 是否实测）见 [docs/SOURCES.zh-CN.md](docs/SOURCES.zh-CN.md)。速览：
 
@@ -147,7 +162,7 @@ Homebrew 只在你想用 `brew` 垫片时才需要。
 | macOS GUI 应用 | ❌ | 用 `brew install --cask` |
 | 上游没有 Intel 二进制的任何东西 | ❌ 设计如此 | 拒绝，并打印 playbook |
 
-## 7. 仓库结构
+## 8. 仓库结构
 
 ```
 src/intelbrew/        工具本体（只用标准库，零依赖）
@@ -165,7 +180,7 @@ docs/                 方法论、源、边界、recipe 规范、FAQ
 tests/                离线单元测试（不需要网络）
 ```
 
-## 8. 开发
+## 9. 开发
 
 ```bash
 python3 -m pytest tests/ -q          # 离线，不用网络
@@ -175,7 +190,7 @@ PYTHONPATH=src python3 -m intelbrew.cli doctor --no-apply
 最有价值的贡献是 **recipe**：每个配方一个已验证的 JSON 文件，证据由
 `ibrew doctor <配方>` 生成，见 [docs/RECIPES.zh-CN.md](docs/RECIPES.zh-CN.md)。
 
-## 9. 状态
+## 10. 状态
 
 | 模块 | 状态 |
 |---|---|

@@ -7,6 +7,8 @@ import platform
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -45,6 +47,78 @@ def err(msg: str) -> None:
 
 class Unsupported(Exception):
     """Raised when the environment cannot be supported (fails closed)."""
+
+
+# --------------------------------------------------------------------------- #
+# Progress / liveness
+# --------------------------------------------------------------------------- #
+
+T0 = time.monotonic()
+
+
+def elapsed() -> float:
+    return time.monotonic() - T0
+
+
+def progress(msg: str) -> None:
+    """A step header that also tells the user how long we have been at it."""
+    print(f"{_c('36', '==>')} {msg}  {_c('2', f'[{elapsed():.1f}s]')}", flush=True)
+
+
+class activity:
+    """Show that work is happening, even when it takes a minute.
+
+    A terminal gets a spinner with elapsed time (so "slow" never looks like
+    "hung"); a pipe/CI gets one plain line on start and one on finish.
+
+    Usage::
+
+        with activity("fetching formula index (32 MB)"):
+            data = fetch()
+    """
+
+    def __init__(self, what: str, slow_after: float = 1.0):
+        self.what = what
+        self.slow_after = slow_after
+
+    def __enter__(self) -> activity:
+        tty = sys.stderr.isatty() and not os.environ.get("IBREW_NO_PROGRESS")
+        self._stop = False
+        self._start = time.monotonic()
+        if not tty:
+            print(f"{_c('36', '==>')} {self.what} …", file=sys.stderr, flush=True)
+            self._thread = None
+            return self
+        frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        start = self._start
+
+        def spin() -> None:
+            i = 0
+            while not self._stop:
+                dt = time.monotonic() - start
+                if dt >= self.slow_after:
+                    sys.stderr.write(f"\r  {frames[i % len(frames)]} {self.what}  {dt:.1f}s   ")
+                    sys.stderr.flush()
+                i += 1
+                time.sleep(0.1)
+
+        self._thread = threading.Thread(target=spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self._stop = True
+        dt = time.monotonic() - self._start
+        th = getattr(self, "_thread", None)
+        if th is not None:
+            th.join(timeout=0.5)
+            if sys.stderr.isatty():
+                sys.stderr.write("\r" + " " * 78 + "\r")
+                sys.stderr.flush()
+        if exc_type is None and dt >= self.slow_after:
+            print(f"  {_c('32', '✓')} {self.what}  {_c('2', f'{dt:.1f}s')}",
+                  file=sys.stderr, flush=True)
+        return False
 
 
 # --------------------------------------------------------------------------- #
