@@ -1,0 +1,213 @@
+"""Offline unit tests — no network, no installs to the real prefix.
+
+Run: PYTHONPATH=src python3 -m pytest tests/ -q
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+import sys
+import tarfile
+import zipfile
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from intelbrew import archive, brew, planner, registry, sources, util  # noqa: E402
+
+
+# --------------------------------------------------------------------------- #
+# platform / tag mapping
+# --------------------------------------------------------------------------- #
+
+def test_tag_for_intel_ventura():
+    pf = util.PlatformInfo("Darwin", "x86_64", "22.6.0", "Intel", "macOS 13.7.8", (13, 7, 8))
+    assert brew.tag_for(pf) == "ventura"
+
+
+def test_tag_for_arm64_sonoma():
+    pf = util.PlatformInfo("Darwin", "arm64", "23.0.0", "Apple Silicon", "macOS 14.0", (14, 0))
+    assert brew.tag_for(pf) == "arm64_sonoma"
+
+
+def test_tag_for_unknown_macos_is_none():
+    pf = util.PlatformInfo("Darwin", "x86_64", "99", "Intel", "macOS 42", (42, 0))
+    assert brew.tag_for(pf) is None
+
+
+def test_tag_for_linux_is_none():
+    pf = util.PlatformInfo("Linux", "x86_64", "6.1", "x86_64", "Ubuntu", None)
+    assert brew.tag_for(pf) is None
+
+
+# --------------------------------------------------------------------------- #
+# request parsing
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("token,expected", [
+    ("node", ("node", "")),
+    ("node@22", ("node", "22")),
+    ("brew-node", ("node", "")),
+    ("brew-node@20", ("node", "20")),
+])
+def test_parse_request(token, expected):
+    assert planner.parse_request(token) == expected
+
+
+# --------------------------------------------------------------------------- #
+# archive safety
+# --------------------------------------------------------------------------- #
+
+def _tar(path, members):
+    with tarfile.open(path, "w:gz") as tf:
+        for name, data in members:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+
+
+def test_archive_rejects_parent_escape(tmp_path):
+    p = tmp_path / "evil.tar.gz"
+    _tar(p, [("../../etc/passwd", b"x")])
+    with pytest.raises(archive.UnsafeArchive):
+        archive.extract(str(p), str(tmp_path / "out"))
+
+
+def test_archive_rejects_absolute_path(tmp_path):
+    p = tmp_path / "evil.tar.gz"
+    _tar(p, [("/tmp/evil", b"x")])
+    with pytest.raises(archive.UnsafeArchive):
+        archive.extract(str(p), str(tmp_path / "out"))
+
+
+def test_archive_rejects_escaping_symlink(tmp_path):
+    p = tmp_path / "evil.tar.gz"
+    with tarfile.open(p, "w:gz") as tf:
+        link = tarfile.TarInfo("link")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../../etc/passwd"
+        tf.addfile(link)
+    with pytest.raises(archive.UnsafeArchive):
+        archive.extract(str(p), str(tmp_path / "out"))
+
+
+def test_archive_extracts_normal_tree(tmp_path):
+    p = tmp_path / "ok.tar.gz"
+    _tar(p, [("t/bin/tool", b"#!/bin/sh\necho hi\n")])
+    out = tmp_path / "out"
+    archive.extract(str(p), str(out))
+    f = out / "t" / "bin" / "tool"
+    assert f.read_bytes().startswith(b"#!/bin/sh")
+
+
+def test_archive_zip_symlink_and_modes(tmp_path):
+    p = tmp_path / "ok.zip"
+    with zipfile.ZipFile(p, "w") as zf:
+        info = zipfile.ZipInfo("bin/tool")
+        info.external_attr = (0o100755 << 16)
+        zf.writestr(info, "#!/bin/sh\n")
+    out = tmp_path / "out"
+    archive.extract(str(p), str(out))
+    assert os.access(out / "bin" / "tool", os.X_OK)
+
+
+def test_unsupported_archive_type(tmp_path):
+    p = tmp_path / "x.pkg"
+    p.write_bytes(b"x")
+    with pytest.raises(util.Unsupported):
+        archive.kind(str(p))
+
+
+def test_flatten_root_detects_single_dir(tmp_path):
+    d = tmp_path / "x" / "node-v1"
+    d.mkdir(parents=True)
+    assert archive.flatten_root(str(tmp_path / "x")) == str(d)
+
+
+# --------------------------------------------------------------------------- #
+# asset filtering (architecture must never be guessed)
+# --------------------------------------------------------------------------- #
+
+def _pf(arch="x86_64"):
+    mac = (13, 7, 8) if arch == "x86_64" else (14, 0)
+    return util.PlatformInfo("Darwin", arch, "22", "Intel" if arch == "x86_64" else "Apple Silicon",
+                             "macOS 13.7.8", mac)
+
+
+def test_filter_assets_picks_intel_and_skips_arm():
+    assets = [
+        {"name": "tool-1.0-aarch64-apple-darwin.tar.gz"},
+        {"name": "tool-1.0-x86_64-apple-darwin.tar.gz"},
+        {"name": "tool-1.0-x86_64-pc-windows-msvc.zip"},
+        {"name": "tool-1.0-x86_64-unknown-linux-gnu.tar.gz"},
+        {"name": "tool-1.0-x86_64-apple-darwin.tar.gz.sha256"},
+    ]
+    got = [a["name"] for a in sources.filter_assets(assets, _pf())]
+    assert got == ["tool-1.0-x86_64-apple-darwin.tar.gz"]
+
+
+def test_filter_assets_rejects_pkg_and_dmg():
+    assets = [{"name": "tool-x86_64-apple-darwin.pkg"},
+              {"name": "tool-x86_64-apple-darwin.dmg"}]
+    assert sources.filter_assets(assets, _pf()) == []
+
+
+def test_filter_assets_arm_host_skips_intel_build():
+    assets = [{"name": "tool-darwin-amd64.tar.gz"},
+              {"name": "tool-darwin-arm64.tar.gz"}]
+    assert [a["name"] for a in sources.filter_assets(assets, _pf("arm64"))] == \
+        ["tool-darwin-arm64.tar.gz"]
+
+
+def test_sha256_file_like_accepts_github_digest():
+    assert sources.sha256_file_like({"digest": "sha256:" + "a" * 64}) == "a" * 64
+    assert sources.sha256_file_like({"digest": "md5:beef"}) == ""
+    assert sources.sha256_file_like({}) == ""
+
+
+# --------------------------------------------------------------------------- #
+# npm allowlist — never map arbitrary brew names onto npm
+# --------------------------------------------------------------------------- #
+
+def test_npm_allowlist_contains_js_tools():
+    assert "typescript" in planner.NPM_TOOLS
+    assert "uvicorn" not in planner.NPM_TOOLS     # squatted placeholder on npm
+    assert "ffmpeg" not in planner.NPM_TOOLS
+
+
+# --------------------------------------------------------------------------- #
+# registry
+# --------------------------------------------------------------------------- #
+
+def test_bundled_recipes_are_valid():
+    for name in ("ripgrep", "uv"):
+        r = registry.load(name)
+        assert r is not None, name
+        assert r.steps and r.steps[0]["sha256"], name
+        assert len(r.steps[0]["sha256"]) == 64, name
+
+
+def test_recipe_requirement_gate():
+    pf_old = util.PlatformInfo("Darwin", "x86_64", "19", "Intel", "macOS 10.15", (10, 15))
+    r = registry.load("uv")
+    assert r.check_requirements(pf_old) != ""
+
+
+# --------------------------------------------------------------------------- #
+# verification levels
+# --------------------------------------------------------------------------- #
+
+def test_verify_levels():
+    v = {"none": ("none", "unverified"),
+         "sha256": ("none", "digest-only"),
+         "sha256+gpg": ("gpg:ABC", "verified")}
+    for _, (prov, level) in v.items():
+        from intelbrew import verify
+        assert verify.ensure_trusted_level("sha256", prov, []) == level or prov == "none"
+    from intelbrew import verify
+    assert verify.ensure_trusted_level("", "none", []) == "unverified"
+    assert verify.ensure_trusted_level("sha256", "none", []) == "digest-only"
+    assert verify.ensure_trusted_level("sha256", "gpg:ABC", []) == "verified"

@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-14, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install dev deps
+        run: python -m pip install -q pytest
+      - name: unit tests (offline)
+        run: python -m pytest tests/ -q
+      - name: cli smoke test
+        run: |
+          PYTHONPATH=src python -m intelbrew.cli --version
+          PYTHONPATH=src python -m intelbrew.cli status --json | head -30
+
+  recipes:
+    name: recipe validation (Intel macOS)
+    runs-on: macos-13            # last Intel runner image
+    continue-on-error: true      # upstream URLs rot; the job reports, does not block
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: validate every bundled recipe on this machine
+        env:
+          INTELBREW_HOME: ${{ runner.temp }}/intelbrew
+        run: |
+          export PYTHONPATH=src
+          for f in registry/*.json; do
+            name=$(basename "$f" .json)
+            echo "::group::$name"
+            python -m intelbrew.cli doctor "$name" || echo "::warning file=registry/$name.json::doctor reported problems for $name"
+            echo "::endgroup::"
+          done
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -q ruff
+      - run: ruff check src tests
