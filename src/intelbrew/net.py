@@ -292,28 +292,36 @@ def download_race(urls: list[str], dest: str, *, digest: str = "", algo: str = "
         return _download_urllib(urls, dest, digest, algo, total, show, headers, race)
 
     sandbox = tempfile.mkdtemp(prefix="ibrew-dl-")
-    procs: list[tuple[str, subprocess.Popen, str]] = []
+    procs: list[tuple[str, subprocess.Popen, str, str]] = []
     hdr_args: list[str] = []
     for k, v in (headers or {}).items():
         hdr_args += ["-H", f"{k}: {v}"]
     for i, u in enumerate(urls if race else urls[:1]):
         out = os.path.join(sandbox, f"{i}.part")
-        cmd = ["curl", "-fsSL", "--http1.1", "--retry", "2", "--connect-timeout", "15", "--max-time", str(int(total)), "--speed-limit", "2048", "--speed-time", str(int(stall_timeout)), "-A", UA, *hdr_args, "-o", out, u]
-        procs.append((u, subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                                          stderr=subprocess.PIPE), out))
+        side = out + ".size"
+        # curl writes the body to -o; its own progress report goes to stdout,
+        # which we keep in a sidecar so the .part stays a plain archive.
+        cmd = ["curl", "-fsSL", "--http1.1", "--retry", "2", "--connect-timeout", "15",
+               "--max-time", str(int(total)), "--speed-limit", "2048",
+               "--speed-time", str(int(stall_timeout)), "-A", UA, *hdr_args,
+               "-o", out, "-w", "%{size_download}", u]
+        with open(side, "wb") as side_fh:
+            procs.append((u, subprocess.Popen(cmd, stdout=side_fh,
+                                              stderr=subprocess.PIPE), out, side))
     if show:
-        hosts = ", ".join(sorted({urllib.parse.urlparse(u).netloc for u, _, _ in procs if u}))
+        hosts = ", ".join(sorted({urllib.parse.urlparse(u).netloc for u, *_ in procs if u}))
         info(f"downloading {os.path.basename(dest)} — racing {len(procs)} mirror(s): {hosts}")
     t0 = time.time()
+    ticker = _DownloadTicker(dest, full=_remote_size(urls, headers), procs=procs) if show else None
     winner: tuple[str, str] | None = None
     while procs:
         alive = False
-        for u, p, out in list(procs):
+        for u, p, out, side in list(procs):
             rc = p.poll()
             if rc is None:
                 alive = True
                 continue
-            procs.remove((u, p, out))
+            procs.remove((u, p, out, side))
             if rc != 0:
                 msg = (p.stderr.read().decode("utf-8", "replace").strip().splitlines() or ["?"])[-1]
                 if show:
@@ -321,6 +329,8 @@ def download_race(urls: list[str], dest: str, *, digest: str = "", algo: str = "
                 continue
             if winner is None and _verify(out, digest, algo, None):
                 winner = (u, out)
+        if ticker:
+            ticker.tick(procs)
         if winner:
             break
         if not alive:
@@ -328,9 +338,11 @@ def download_race(urls: list[str], dest: str, *, digest: str = "", algo: str = "
         if time.time() - t0 > total:
             break
         time.sleep(0.15)
-    for _, proc, _ in procs:           # slower mirrors: stop them
+    for _, proc, _, _ in procs:        # slower mirrors: stop them
         with contextlib.suppress(OSError):
             proc.kill()
+    if ticker:
+        ticker.close()
     results = []
     if winner:
         os.replace(winner[1], dest)
@@ -344,6 +356,80 @@ def download_race(urls: list[str], dest: str, *, digest: str = "", algo: str = "
         res = Fetch(False, urls[0], error="all mirrors failed")
     shutil.rmtree(sandbox, ignore_errors=True)
     return res, results
+
+
+class _DownloadTicker:
+    """Live percentage while curl writes files next to their destination.
+
+    curl's ``-w '%{size_download}'`` keeps the ``.part`` a plain archive (Homebrew
+    stores bottles in the same directory, so appending a header line to it would
+    corrupt the cache), and we aggregate across racing mirrors by their rounded
+    byte counts — all mirrors serve the same file.
+    """
+
+    def __init__(self, dest: str, full: int | None, procs: list):
+        self.dest = dest
+        self.full = full
+        self.files = [(p, out, side) for _, p, out, side in procs]
+        self.hosts = {out_name: urllib.parse.urlparse(u).netloc
+                      for u, _, out_name, _ in procs}
+        self.t0 = time.time()
+        self.last = 0.0
+        self.tty = sys.stderr.isatty() and not os.environ.get("IBREW_NO_PROGRESS")
+
+    def _sizes(self) -> list[int]:
+        sizes = []
+        for _, _, side in self.files:
+            with contextlib.suppress(OSError), open(side) as fh:
+                sizes.append(int(fh.read().strip() or 0))
+        return sizes
+
+    def tick(self, procs: list) -> None:
+        now = time.time()
+        if now - self.last < 0.25:
+            return
+        self.last = now
+        best = max(self._sizes() or [0])
+        if self.full:
+            pct = 100.0 * best / self.full
+            txt = f"{os.path.basename(self.dest)}  {pct:5.1f}%  {best / 1e6:.1f}/{self.full / 1e6:.1f} MB"
+        else:
+            txt = f"{os.path.basename(self.dest)}  downloaded {best / 1e6:.1f} MB"
+        if self.tty:
+            sp = best / 1e6 / max(now - self.t0, 0.001)
+            sys.stderr.write(f"\r  {txt}  {sp:.1f} MB/s   ")
+            sys.stderr.flush()
+        elif int(now - self.t0) // 5 != int(self.last - self.t0) // 5:
+            print(f"  {txt}", file=sys.stderr, flush=True)
+
+    def close(self) -> None:
+        if self.tty:
+            sys.stderr.write("\r" + " " * 90 + "\r")
+            sys.stderr.flush()
+
+
+def _remote_size(urls: list[str], headers: dict[str, str] | None) -> int | None:
+    """Content-Length of the first mirror that answers (HEAD)."""
+    for u in urls:
+        cmd = ["curl", "-sSI", "--http1.1", "--max-time", "15", "-A", UA]
+        for k, v in (headers or {}).items():
+            cmd += ["-H", f"{k}: {v}"]
+        cmd += [*_curl_proxy_args(u.split(":")[0].lower()), u]
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        for line in (p.stdout or "").splitlines():
+            if line.lower().startswith("content-length:"):
+                with contextlib.suppress(ValueError):
+                    return int(line.split(":", 1)[1].strip())
+    return None
+
+
+def _phase_percent(phase: float, total: float, label: str, item: str = "") -> str:
+    """Overall percentage when one step is a known slice of the whole."""
+    pct = 100.0 * phase / max(total, 0.001)
+    return f"[{pct:5.1f}%] {label}{(' ' + item) if item else ''}"
 
 
 def _download_urllib(urls, dest, digest, algo, total, show, headers, race) -> tuple[Fetch, list[tuple]]:

@@ -133,8 +133,17 @@ $ ibrew plan jq git
 ```
 
 Nothing ever runs silently for minutes, so "slow" cannot be mistaken for "hung".
-`IBREW_NO_PROGRESS=1` turns the spinner off (pipes and CI only get the start/finish
-lines anyway).
+Percentages are real, not estimates:
+
+| What | Shows |
+|---|---|
+| any download (incl. racing mirrors) | `uv-x86_64-apple-darwin.tar.gz  42.3%  7.3/17.2 MB  0.5 MB/s` |
+| `ibrew install a b c` | `[2/3 · 33.3%] b 1.8.2 via registry` |
+| `ibrew doctor` | `[4/6 · 50.0%] network` and `28.6% probing nodejs.org (3/7)` |
+| recipe validation | one step per recipe: `[4/6 · 50.0%] validate recipe jq` |
+
+`IBREW_NO_PROGRESS=1` turns the spinner off; pipes and CI get a line every 5 s
+instead of a spinner.
 
 ## 6. Boundaries — what this does **not** do
 
