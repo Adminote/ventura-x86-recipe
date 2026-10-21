@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intelbrew"
+version = "0.1.0"
+description = "Keep brew/node/npm working on Intel Macs without compiling from source"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "intelbrew contributors" }]
+keywords = ["homebrew", "macos", "intel", "node", "binaries"]
+classifiers = [
+  "Environment :: Console",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: System :: Software Distribution",
+]
+
+[project.urls]
+Homepage = "https://github.com/Adminote/ventura-x86-recipe"
+Issues = "https://github.com/Adminote/ventura-x86-recipe/issues"
+
+[project.scripts]
+ibrew = "intelbrew.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# --------------------------------------------------------------------------- #
+# ruff
+# --------------------------------------------------------------------------- #
+# The config lives in the repo on purpose: without it the rule set depends on
+# whatever ~/.config/ruff/ruff.toml a contributor happens to have, and CI
+# disagrees with local runs.
+#
+# Deliberately *not* enabled: flake8-bandit (S) and flake8-blind-except (BLE).
+# This tool downloads and executes third-party binaries by design, and its job
+# is to keep going when one of many mirrors misbehaves; "catch broadly and
+# continue" is the intended behaviour, not an oversight. Archive path safety is
+# enforced in archive.py and covered by tests instead.
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle
+  "F",   # pyflakes
+  "W",   # pycodestyle warnings
+  "I",   # import sorting
+  "UP",  # pyupgrade (py39 target: keeps runtime compatible with system python)
+  "B",   # bugbear
+  "SIM", # simplify
+  "PIE", # misc
+  "RUF", # ruff-specific
+]
+ignore = [
+  "E501",  # long lines: tables, URLs and help strings read better unwrapped
+  "RUF001", "RUF002", "RUF003",  # ambiguous unicode: docs contain ✓ / → / 中文标点
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]  # assert False is a legitimate failure marker in tests
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

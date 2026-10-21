@@ -15,16 +15,12 @@ It never re-implements Homebrew: it always calls the real ``brew``.
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import shutil
 import sys
-import time
-from typing import List, Optional, Tuple
 
 from . import brew, installer
-from .util import PlatformInfo, current_platform, err, info, ok, run, warn
+from .util import PlatformInfo, current_platform, err, info, ok, run
 
 SKIP_PREFIX = "brew-"      # explicit escape hatch: shimming.brew install brew-node
 
@@ -51,7 +47,7 @@ def install_shadow(shim_path: str = "") -> str:
     return d
 
 
-def _find_real_brew() -> Optional[str]:
+def _find_real_brew() -> str | None:
     me = os.path.realpath(sys.argv[0]) if sys.argv else ""
     for p in os.environ.get("PATH", "").split(os.pathsep):
         cand = os.path.join(p, "brew")
@@ -82,10 +78,10 @@ def _env() -> dict:
     return env
 
 
-def passthrough(argv: List[str]) -> int:
+def passthrough(argv: list[str]) -> int:
     rb = real_brew()
     sys.stdout.flush()
-    os.execv(rb, [rb] + argv)
+    os.execv(rb, [rb, *argv])
 
 
 # --------------------------------------------------------------------------- #
@@ -107,12 +103,12 @@ def _classify(formula: str, pf: PlatformInfo) -> str:
     return "compile-only"
 
 
-def install(argv: List[str], pf: PlatformInfo) -> int:
+def install(argv: list[str], pf: PlatformInfo) -> int:
     """Handle ``brew install …`` / ``brew reinstall …`` / ``brew upgrade …`` with rerouting."""
     verb = argv[0]                       # install | reinstall | upgrade
     rest = argv[1:]
-    formulas: List[str] = []
-    opts: List[str] = []
+    formulas: list[str] = []
+    opts: list[str] = []
     cask = False
     build_from_source = False
     want_stdout = False
@@ -145,7 +141,7 @@ def install(argv: List[str], pf: PlatformInfo) -> int:
     rc = 0
     if native:
         info(f"brew {verb} {' '.join(native)}  (native bottle exists for this platform)")
-        r = run([real_brew(), verb] + opts + native, timeout=7200, capture=False, env=_env())
+        r = run([real_brew(), verb, *opts, *native], timeout=7200, capture=False, env=_env())
         rc = r.returncode
     if rerouted:
         from . import planner
@@ -172,7 +168,7 @@ def install(argv: List[str], pf: PlatformInfo) -> int:
                     err(f"{f}: {st.error}")
                     rc = rc or 1
     if plain:
-        r = run([real_brew(), verb] + opts + plain, timeout=7200, capture=False, env=_env())
+        r = run([real_brew(), verb, *opts, *plain], timeout=7200, capture=False, env=_env())
         rc = rc or r.returncode
     return rc
 
@@ -196,7 +192,7 @@ def status(pf: PlatformInfo) -> dict:
     }
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv:
         return passthrough([])

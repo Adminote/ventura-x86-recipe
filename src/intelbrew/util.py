@@ -7,8 +7,8 @@ import platform
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable, Optional
 
 # --------------------------------------------------------------------------- #
 # Output helpers (respect NO_COLOR / non-tty)
@@ -58,7 +58,7 @@ class PlatformInfo:
     release: str           # kernel release, e.g. "22.6.0"
     machine: str           # "Intel" | "Apple Silicon" | "Unknown"
     pretty_name: str       # "macOS 13.7.8" / "Ubuntu 24.04"
-    macos_version: Optional[tuple]   # (13, 7, 8) for macOS, else None
+    macos_version: tuple | None   # (13, 7, 8) for macOS, else None
 
     @property
     def is_intel_mac(self) -> bool:
@@ -75,7 +75,7 @@ class PlatformInfo:
         return d
 
 
-def _sysctl(key: str) -> Optional[str]:
+def _sysctl(key: str) -> str | None:
     try:
         out = subprocess.run(["sysctl", "-n", key], capture_output=True, text=True, timeout=10)
     except Exception:
@@ -143,7 +143,7 @@ class Result:
 
 
 def run(cmd: Iterable[str], *, timeout: float = 300, capture: bool = True,
-        env: Optional[dict] = None) -> Result:
+        env: dict | None = None) -> Result:
     """Run a command. Never raises for non-zero exit; raises only on spawn errors/timeouts."""
     cmd = list(cmd)
     try:
@@ -157,7 +157,7 @@ def run(cmd: Iterable[str], *, timeout: float = 300, capture: bool = True,
         return Result(127, "", f"not found: {cmd[0]}")
 
 
-def which(name: str) -> Optional[str]:
+def which(name: str) -> str | None:
     return shutil.which(name)
 
 

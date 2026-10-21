@@ -13,11 +13,10 @@ import os
 import re
 import shutil
 import tempfile
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from dataclasses import dataclass
 
 from . import brew, net, registry, sources
-from .util import PlatformInfo, err, info, ok, run, warn
+from .util import PlatformInfo, run
 
 
 @dataclass
@@ -43,8 +42,8 @@ def check_platform(pf: PlatformInfo) -> Check:
     return Check("platform", "warn", f"{pf.pretty_name} ({pf.arch}): only brew shims make sense here")
 
 
-def check_brew(pf: PlatformInfo) -> List[Check]:
-    out: List[Check] = []
+def check_brew(pf: PlatformInfo) -> list[Check]:
+    out: list[Check] = []
     if not shutil.which("brew"):
         return [Check("brew", "skipped", "brew not installed")]
     ver = brew.brew_version()
@@ -87,8 +86,8 @@ def check_cellar_writable() -> Check:
                      fix="brew bottles need a writable Cellar; other sources go to ~/.intelbrew/root")
 
 
-def check_toolchain() -> List[Check]:
-    out: List[Check] = []
+def check_toolchain() -> list[Check]:
+    out: list[Check] = []
     for tool, probe in (("python3", ["-V"]), ("git", ["--version"]), ("curl", ["--version"]),
                         ("node", ["-v"]), ("npm", ["-v"]), ("gpg", ["--version"]),
                         ("codesign", ["-v"]), ("otool", ["-help"])):
@@ -99,7 +98,7 @@ def check_toolchain() -> List[Check]:
                                   "node": "`ibrew node install`",
                                   "npm": "`ibrew node install`"}.get(tool, "")))
             continue
-        r = run([p] + probe, timeout=20)
+        r = run([p, *probe], timeout=20)
         lines = [ln for ln in (r.stdout or r.stderr).splitlines() if ln.strip()]
         line = lines[0][:60] if lines else ""
         good = r.returncode == 0 or tool in ("codesign", "otool")   # they print usage, exit 1
@@ -107,8 +106,8 @@ def check_toolchain() -> List[Check]:
     return out
 
 
-def check_network() -> List[Check]:
-    out: List[Check] = []
+def check_network() -> list[Check]:
+    out: list[Check] = []
     probes = [
         ("formulae.brew.sh", "https://formulae.brew.sh/api/formula/node.json"),
         ("ghcr.io", "https://ghcr.io/v2/"),
@@ -127,8 +126,8 @@ def check_network() -> List[Check]:
     return out
 
 
-def check_proxy() -> List[Check]:
-    out: List[Check] = []
+def check_proxy() -> list[Check]:
+    out: list[Check] = []
     gitcfg = run(["git", "config", "--get", "http.https://github.com.proxy"], timeout=20)
     if gitcfg.ok and gitcfg.out:
         host = gitcfg.out.strip().split("//")[-1].rstrip("/")
@@ -146,7 +145,7 @@ def check_proxy() -> List[Check]:
     return out
 
 
-def check_node_ceiling(pf: PlatformInfo) -> List[Check]:
+def check_node_ceiling(pf: PlatformInfo) -> list[Check]:
     out = []
     idx = sources.node_index()
     usable = [e for e in idx if sources.node_supported_arch(pf, e)]
@@ -169,8 +168,8 @@ def check_node_ceiling(pf: PlatformInfo) -> List[Check]:
 # recipe validation
 # --------------------------------------------------------------------------- #
 
-def validate_recipe(name: str, pf: PlatformInfo, *, apply: bool = True) -> List[Check]:
-    out: List[Check] = []
+def validate_recipe(name: str, pf: PlatformInfo, *, apply: bool = True) -> list[Check]:
+    out: list[Check] = []
     r = registry.load(name)
     if not r:
         return [Check("recipe", "fail", f"no recipe for {name} (a recipe is not needed when "

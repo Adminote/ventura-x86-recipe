@@ -17,14 +17,11 @@ import json
 import os
 import re
 import shutil
-import subprocess
-import sys
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 from . import archive, brew, net, verify
-from .util import PlatformInfo, err, info, ok, run, warn
+from .util import PlatformInfo, info, run, warn
 
 
 def root() -> str:
@@ -41,16 +38,30 @@ def state_dir() -> str:
     return p
 
 
+def _read_json(path: str, default):
+    """Read JSON, returning ``default`` when the file is missing or unreadable."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return default
+
+
+def _write_json(path: str, data) -> None:
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=1)
+
+
 @dataclass
 class Outcome:
     formula: str
     step: dict
     installed: bool = False
     prefix: str = ""
-    bins: List[str] = field(default_factory=list)
+    bins: list[str] = field(default_factory=list)
     report: str = ""
     error: str = ""
-    backup_keys: List[str] = field(default_factory=list)
+    backup_keys: list[str] = field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -63,8 +74,8 @@ def _looks_like_prefix(src: str, formula: str) -> bool:
     if not os.path.isdir(b):
         return False
     files = [f for f in os.listdir(b) if os.path.isfile(os.path.join(b, f))]
-    return len(files) > 1 or os.path.basename(b).startswith("bin") and len(files) == 1 \
-        and formula in " ".join(files)
+    return len(files) > 1 or (os.path.basename(b).startswith("bin") and len(files) == 1 \
+        and formula in " ".join(files))
 
 
 def _macho_arch_ok(path: str, pf: PlatformInfo) -> bool:
@@ -88,7 +99,7 @@ def _macho_arch_ok(path: str, pf: PlatformInfo) -> bool:
     return True
 
 
-def _min_macos(path: str) -> Optional[int]:
+def _min_macos(path: str) -> int | None:
     otool = shutil.which("otool") or "/usr/bin/otool"
     if not os.path.exists(otool):
         return None
@@ -97,7 +108,7 @@ def _min_macos(path: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-def _which_all(name: str) -> List[str]:
+def _which_all(name: str) -> list[str]:
     out = []
     for d in os.environ.get("PATH", "").split(os.pathsep):
         p = os.path.join(d, name)
@@ -133,19 +144,13 @@ def _backup(path: str) -> bool:
 
 def _record_backup(orig: str, backup: str) -> None:
     p = os.path.join(state_dir(), "backups.json")
-    try:
-        data = json.load(open(p, encoding="utf-8"))
-    except Exception:
-        data = []
+    data = _read_json(p, [])
     data.append({"path": orig, "backup": backup, "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
-    json.dump(data, open(p, "w", encoding="utf-8"), indent=1)
+    _write_json(p, data)
 
 
-def backups() -> List[dict]:
-    try:
-        return json.load(open(os.path.join(state_dir(), "backups.json"), encoding="utf-8"))
-    except Exception:
-        return []
+def backups() -> list[dict]:
+    return _read_json(os.path.join(state_dir(), "backups.json"), [])
 
 
 def restore_backup(path: str) -> bool:
@@ -158,11 +163,11 @@ def restore_backup(path: str) -> bool:
         os.unlink(path)
     shutil.move(b["backup"], path)
     rest = [x for x in data if x is not b]
-    json.dump(rest, open(os.path.join(state_dir(), "backups.json"), "w", encoding="utf-8"), indent=1)
+    _write_json(os.path.join(state_dir(), "backups.json"), rest)
     return True
 
 
-def make_links(names: Dict[str, str], *, overwrite_toolchain: bool = True) -> List[str]:
+def make_links(names: dict[str, str], *, overwrite_toolchain: bool = True) -> list[str]:
     """``{command: target}`` → symlinks in :func:`bin_dir`. Returns created commands."""
     os.makedirs(bin_dir(), exist_ok=True)
     made = []
@@ -185,7 +190,7 @@ def _install_archive_dir(extracted: str, formula: str, step: dict, pf: PlatformI
     src = extracted
     for _ in range(strip):
         src = archive.flatten_root(src)
-    size = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(src) for f in fs
+    sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(src) for f in fs
                if os.path.exists(os.path.join(dp, f)))
     single_bin = step.get("bin")
     explicit = step.get("install", {}).get("bin") if step.get("install") else None
@@ -249,7 +254,7 @@ def install_archive(step: dict, formula: str, pf: PlatformInfo, *, allow_unverif
 
     fn = step.get("filename") or os.path.basename(url.split("?")[0]) or f"{formula}.bin"
     dl = os.path.join(net.cache_dir("downloads"), fn)
-    urls = net.dedupe([url] + list(step.get("fallback_urls") or []))
+    urls = net.dedupe([url, *list(step.get("fallback_urls") or [])])
     r, _races = net.download_race(urls, dl, digest=digest, algo="sha256")
     if not r.ok:
         out.error = f"download failed on every mirror ({r.error})"
@@ -302,7 +307,7 @@ def install_archive(step: dict, formula: str, pf: PlatformInfo, *, allow_unverif
         info(f"extracting {os.path.basename(dl)}")
         archive.extract(dl, ex)
     if team and not raw:
-        b = verify.first_binary(os.path.join(ex, step.get("strip") and archive.flatten_root(ex) or ex, "bin")) \
+        b = verify.first_binary(os.path.join(ex, (step.get("strip") and archive.flatten_root(ex)) or ex, "bin")) \
             or verify.first_binary(archive.flatten_root(ex))
         found = verify.codesign_team(b) if b else None
         if found == team:
@@ -353,7 +358,7 @@ def install_archive(step: dict, formula: str, pf: PlatformInfo, *, allow_unverif
     return out
 
 
-def _fetch_sig(url: str, data_path: str) -> Optional[str]:
+def _fetch_sig(url: str, data_path: str) -> str | None:
     dest = data_path + ".asc"
     r = net.download(url, dest, show=False)
     return dest if r.ok else None
@@ -373,7 +378,7 @@ def install_npm(step: dict, formula: str, pf: PlatformInfo) -> Outcome:
         out.error = f"npm registry: cannot resolve {pkg}@{version}"
         return out
     d = meta.json()
-    if "security" in str(d.get("version", "")) or d.get("deprecated") and "security" in str(d.get("deprecated", "")):
+    if "security" in str(d.get("version", "")) or (d.get("deprecated") and "security" in str(d.get("deprecated", ""))):
         out.error = f"'{pkg}' on npm is a squatted security placeholder, not the real tool; refusing"
         return out
     tarball = d.get("dist", {}).get("tarball", "")
@@ -439,12 +444,14 @@ def _ghcr_resolve(formula: str, version: str, want_tag: str) -> tuple:
             tag = ref.rsplit(".", 1)[-1] if ref else ""
             man = get(f"{base}/manifests/{m['digest']}",
                       "application/vnd.oci.image.manifest.v1+json")
-            cfg = next((l["digest"] for l in man.get("layers", [])
-                        if l.get("annotations", {}).get("sh.brew.bottle.install")), None) \
+            layers = man.get("layers", [])
+            cfg = next((lay["digest"] for lay in layers
+                        if (lay.get("annotations") or {}).get("sh.brew.bottle.install")), None) \
                 or (man.get("config") or {}).get("digest")
-            layer = next((l["digest"] for l in man.get("layers", [])
-                          if (l.get("annotations") or {}).get("org.opencontainers.image.title")
-                          or "").endswith("bottle.tar.gz"), None)
+            layer = next((lay["digest"] for lay in layers
+                          if ((lay.get("annotations") or {})
+                              .get("org.opencontainers.image.title") or "")
+                          .endswith("bottle.tar.gz")), None)
             if cfg and layer:
                 return cfg, layer, tag
     raise RuntimeError(f"no darwin/{want['arch']} macOS {want['os_version']} bottle in "
@@ -488,7 +495,10 @@ def install_bottle(step: dict, formula: str, pf: PlatformInfo) -> Outcome:
     if not r.ok:
         out.error = f"bottle config download failed: {r.error}"
         return out
-    cfg = json.load(open(cfg_local, encoding="utf-8"))
+    cfg = _read_json(cfg_local, {})
+    if not cfg:
+        out.error = "bottle config blob is not valid JSON"
+        return out
     b = (cfg.get("config") or {}).get("Labels") or {}
     bottle_hash = b.get("sh.brew.bottle.digest") or ""
     want_ver = b.get("org.opencontainers.image.version") or version
@@ -536,7 +546,7 @@ def install_bottle(step: dict, formula: str, pf: PlatformInfo) -> Outcome:
     return out
 
 
-def _formula_commands(formula: str, kdir: str) -> List[tuple]:
+def _formula_commands(formula: str, kdir: str) -> list[tuple]:
     out = []
     for sub in ("bin", "sbin"):
         d = os.path.join(kdir, sub)
@@ -553,21 +563,15 @@ def _installed_version(formula: str) -> str:
 
 def _record_install(formula: str, step: dict, out: Outcome) -> None:
     p = os.path.join(state_dir(), "installed.json")
-    try:
-        data = json.load(open(p, encoding="utf-8"))
-    except Exception:
-        data = {}
+    data = _read_json(p, {})
     data[formula] = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "prefix": out.prefix,
                      "bins": out.bins, "source": step.get("source", step.get("kind")),
                      "version": step.get("version", ""), "report": out.report}
-    json.dump(data, open(p, "w", encoding="utf-8"), indent=1)
+    _write_json(p, data)
 
 
-def installed_state() -> Dict[str, dict]:
-    try:
-        return json.load(open(os.path.join(state_dir(), "installed.json"), encoding="utf-8"))
-    except Exception:
-        return {}
+def installed_state() -> dict[str, dict]:
+    return _read_json(os.path.join(state_dir(), "installed.json"), {})
 
 
 # --------------------------------------------------------------------------- #

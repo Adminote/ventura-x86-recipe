@@ -33,6 +33,8 @@ binary; on success it writes the `verified` block. Commit only recipes with a fr
 
 ```bash
 python -m pytest tests/ -q                 # offline, must pass
+python -m pip install "ruff==0.17.1"       # same version CI pins
+ruff check src tests                       # must be clean; config is in pyproject.toml
 PYTHONPATH=src python -m intelbrew.cli doctor --no-apply
 PYTHONPATH=src python -m intelbrew.cli plan <name> -v
 ```

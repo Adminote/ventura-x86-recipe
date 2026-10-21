@@ -31,6 +31,8 @@ git add registry/<名字>.json
 
 ```bash
 python -m pytest tests/ -q                 # 离线，必须通过
+python -m pip install "ruff==0.17.1"       # 与 CI 固定同一个版本
+ruff check src tests                       # 必须干净；配置在 pyproject.toml
 PYTHONPATH=src python -m intelbrew.cli doctor --no-apply
 PYTHONPATH=src python -m intelbrew.cli plan <名字> -v
 ```

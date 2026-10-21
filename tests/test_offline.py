@@ -6,7 +6,6 @@ Run: PYTHONPATH=src python3 -m pytest tests/ -q
 from __future__ import annotations
 
 import io
-import json
 import os
 import sys
 import tarfile
@@ -16,8 +15,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from intelbrew import archive, brew, planner, registry, sources, util  # noqa: E402
-
+from intelbrew import archive, brew, planner, registry, sources, util
 
 # --------------------------------------------------------------------------- #
 # platform / tag mapping

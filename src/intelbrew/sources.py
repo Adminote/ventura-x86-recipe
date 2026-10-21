@@ -23,7 +23,6 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
 
 from . import brew, net
 from .util import PlatformInfo, warn
@@ -39,7 +38,7 @@ class Candidate:
     version: str = ""
     fmt: str = ""               # expected archive kind (detected from URL otherwise)
     notes: str = ""
-    fallbacks: List[str] = field(default_factory=list)   # other mirrors of same bytes
+    fallbacks: list[str] = field(default_factory=list)   # other mirrors of same bytes
     meta: dict = field(default_factory=dict)             # source-specific (filename, asset…)
 
     def __str__(self) -> str:
@@ -73,7 +72,7 @@ def _macos_major(pf: PlatformInfo) -> int:
     return pf.macos_version[0] if pf.macos_version else 0
 
 
-def _go_version(v: str) -> Tuple[int, ...]:
+def _go_version(v: str) -> tuple[int, ...]:
     v = v.strip().lstrip("go")
     out = []
     for part in v.split(".")[:3]:
@@ -103,7 +102,7 @@ def sha256_file_like(d: dict) -> str:
 # Source: brewing a Homebrew bottle (native path, uses brew's own remote)
 # --------------------------------------------------------------------------- #
 
-def brew_bottle(name: str, pf: PlatformInfo) -> Optional[Candidate]:
+def brew_bottle(name: str, pf: PlatformInfo) -> Candidate | None:
     info_ = brew.bottle_info(name)
     if not info_ or info_.disabled:
         return None
@@ -111,7 +110,7 @@ def brew_bottle(name: str, pf: PlatformInfo) -> Optional[Candidate]:
     tags = [t for t in info_.tags if t.startswith("arm64_") == (pf.arch == "arm64")]
     mine = _macos_major(pf)
 
-    def rank(t: str) -> Tuple[int, int]:
+    def rank(t: str) -> tuple[int, int]:
         return (1 if brew.TAG_TO_MACOS.get(t, 0) <= mine else 0, brew.TAG_TO_MACOS.get(t, 0))
 
     tags = [t for t in tags if t in brew.TAG_TO_MACOS]
@@ -139,10 +138,10 @@ def brew_bottle(name: str, pf: PlatformInfo) -> Optional[Candidate]:
 # Source: Node.js official dist (darwin-x64 / darwin-arm64)
 # --------------------------------------------------------------------------- #
 
-_NODE_INDEX_CACHE: Optional[List[dict]] = None
+_NODE_INDEX_CACHE: list[dict] | None = None
 
 
-def node_index() -> List[dict]:
+def node_index() -> list[dict]:
     global _NODE_INDEX_CACHE
     if _NODE_INDEX_CACHE is not None:
         return _NODE_INDEX_CACHE
@@ -168,14 +167,14 @@ def node_index() -> List[dict]:
     return _NODE_INDEX_CACHE
 
 
-def node_supported_arch(pf: PlatformInfo, entry: dict) -> Optional[str]:
+def node_supported_arch(pf: PlatformInfo, entry: dict) -> str | None:
     files = entry.get("files") or []
     if pf.arch == "arm64":
         return "darwin-arm64" if "osx-arm64-tar" in files else None
     return "darwin-x64" if "osx-x64-tar" in files else None
 
 
-def node_dist(series: str, pf: PlatformInfo, channel: str = "lts") -> Optional[Candidate]:
+def node_dist(series: str, pf: PlatformInfo, channel: str = "lts") -> Candidate | None:
     if pf.system != "Darwin":
         return None
     idx = node_index()
@@ -227,7 +226,7 @@ def node_dist(series: str, pf: PlatformInfo, channel: str = "lts") -> Optional[C
     )
 
 
-def node_requirements_ok(requirements: dict, pf: PlatformInfo) -> Tuple[bool, str]:
+def node_requirements_ok(requirements: dict, pf: PlatformInfo) -> tuple[bool, str]:
     """Check a tool's documented minimum macOS/Node version."""
     for engine in ("macos", "node", "os"):
         need = (requirements or {}).get(engine)
@@ -298,7 +297,7 @@ ASSET_GLOBS = {
 TRUSTED_CASKS_TEAM = {"cli/cli": "W7QN8QE9Q9"}  # gh: GitHub CLI (not needed for formulas)
 
 
-def asset_arch_tokens(pf: PlatformInfo) -> List[str]:
+def asset_arch_tokens(pf: PlatformInfo) -> list[str]:
     if pf.arch == "arm64":
         return ["arm64", "aarch64"]
     return ["amd64", "x86_64", "x64", "intel", "386", "i386"]
@@ -311,7 +310,7 @@ NOT_PAYLOAD = ("sha256", "sha512", "checksums", "attestation", "sbom", "license"
                "changelog", "source", "src")
 
 
-def filter_assets(assets: List[dict], pf: PlatformInfo) -> List[dict]:
+def filter_assets(assets: list[dict], pf: PlatformInfo) -> list[dict]:
     """Keep assets that are macOS + this architecture.
 
     Both archives and *raw* (extensionless) single binaries are accepted: many
@@ -350,7 +349,7 @@ def is_archive(name: str) -> bool:
     return name.lower().endswith(ARCHIVE_EXTS)
 
 
-def _prefer(names: List[str], patterns: List[str]) -> Optional[int]:
+def _prefer(names: list[str], patterns: list[str]) -> int | None:
     for pat in patterns:
         for i, n in enumerate(names):
             if fnmatch.fnmatch(n.lower(), pat.lower()):
@@ -358,14 +357,14 @@ def _prefer(names: List[str], patterns: List[str]) -> Optional[int]:
     return 0 if names else None
 
 
-def github_release(tool: str, pf: PlatformInfo, version: str = "", channel: str = "lts") -> Optional[Candidate]:
+def github_release(tool: str, pf: PlatformInfo, version: str = "", channel: str = "lts") -> Candidate | None:
     repo = GITHUB_REPOS.get(tool)
     if not repo:
         return None
     return github_release_repo(repo, pf, version)
 
 
-def github_release_repo(repo: str, pf: PlatformInfo, version: str = "") -> Optional[Candidate]:
+def github_release_repo(repo: str, pf: PlatformInfo, version: str = "") -> Candidate | None:
     """Latest non-prerelease release of ``repo`` with a macOS asset for this arch."""
     try:
         if version:
@@ -386,10 +385,7 @@ def github_release_repo(repo: str, pf: PlatformInfo, version: str = "") -> Optio
     # prefer real archives; fall back to a raw single binary
     archived = [n for n in names if is_archive(n)]
     idx = _prefer(archived, ASSET_GLOBS["darwin"].get(pf.arch, [])) if archived else None
-    if idx is not None:
-        idx = names.index(archived[idx])
-    else:
-        idx = 0
+    idx = names.index(archived[idx]) if idx is not None else 0
     asset = assets[idx]
     digest = sha256_file_like(asset) or _digest_from_sha_asset(rel["assets"], asset["name"])
     direct = asset["browser_download_url"]
@@ -418,7 +414,7 @@ def _clean_version(tag: str) -> str:
     return t.lstrip("v")
 
 
-def _digest_from_sha_asset(assets: List[dict], name: str) -> str:
+def _digest_from_sha_asset(assets: list[dict], name: str) -> str:
     """Look for ``<asset>.sha256`` / SHA256SUMS in the same release."""
     for a in assets:
         an = a.get("name", "")
@@ -446,7 +442,7 @@ def _digest_from_sha_asset(assets: List[dict], name: str) -> str:
 # Source: Adoptium Temurin JDK (x64/mac) — covers openjdk
 # --------------------------------------------------------------------------- #
 
-def adoptium_jdk(series: str, pf: PlatformInfo) -> Optional[Candidate]:
+def adoptium_jdk(series: str, pf: PlatformInfo) -> Candidate | None:
     if pf.system != "Darwin":
         return None
     arch = "aarch64" if pf.arch == "arm64" else "x64"
@@ -492,9 +488,9 @@ def adoptium_jdk(series: str, pf: PlatformInfo) -> Optional[Candidate]:
 # Source: PyPI — standalone .app / .pyz zipapps for Python CLI tools
 # --------------------------------------------------------------------------- #
 
-def _pypi_files(pkg: str) -> List[dict]:
+def _pypi_files(pkg: str) -> list[dict]:
     meta = net.request(f"https://pypi.org/pypi/{pkg}/json", timeout=30)
-    files: List[dict] = []
+    files: list[dict] = []
     if meta.ok:
         try:
             data = meta.json()
@@ -515,7 +511,7 @@ def _pypi_files(pkg: str) -> List[dict]:
     return files
 
 
-def pypi_tool(tool: str, pf: PlatformInfo) -> Optional[Candidate]:
+def pypi_tool(tool: str, pf: PlatformInfo) -> Candidate | None:
     # zipapps: a single file ending in .app / .pyz that self-extracts
     try:
         files = _pypi_files(tool)
@@ -540,7 +536,7 @@ def pypi_tool(tool: str, pf: PlatformInfo) -> Optional[Candidate]:
 # Source: conda-forge — osx-64 / noarch packages (data tools with native deps)
 # --------------------------------------------------------------------------- #
 
-def conda_pkg(pkg: str, pf: PlatformInfo) -> Optional[Candidate]:
+def conda_pkg(pkg: str, pf: PlatformInfo) -> Candidate | None:
     """conda-forge package for this arch (osx-64 / osx-arm64 / noarch).
 
     Uses ``current_repodata.json`` only (a few MB) — the full repodata is
@@ -548,7 +544,7 @@ def conda_pkg(pkg: str, pf: PlatformInfo) -> Optional[Candidate]:
     """
     subdir = "osx-arm64" if pf.arch == "arm64" else "osx-64"
 
-    def pick(meta: dict, base: str, sub: str) -> Optional[Candidate]:
+    def pick(meta: dict, base: str, sub: str) -> Candidate | None:
         best = None
         for fn, m in (meta.get("packages.conda") or {}).items():
             if m.get("name") != pkg:
@@ -582,7 +578,7 @@ def conda_pkg(pkg: str, pf: PlatformInfo) -> Optional[Candidate]:
 # Source: npm global install (fallback: the tool *is* a JS package)
 # --------------------------------------------------------------------------- #
 
-def npm_package(tool: str, pf: PlatformInfo, version: str = "") -> Optional[Candidate]:
+def npm_package(tool: str, pf: PlatformInfo, version: str = "") -> Candidate | None:
     for base in net.NPM_MIRRORS():
         r = net.request(f"{base}/{tool}/latest" if not version else f"{base}/{tool}/{version}",
                         timeout=30)

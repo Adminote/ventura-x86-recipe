@@ -30,7 +30,6 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 from .util import PlatformInfo, warn
 
@@ -49,7 +48,7 @@ _USER_DIR = os.path.join(os.environ.get("INTELBREW_HOME") or os.path.expanduser(
 class Recipe:
     name: str
     version: str = ""
-    steps: List[dict] = field(default_factory=list)
+    steps: list[dict] = field(default_factory=list)
     requires: dict = field(default_factory=dict)
     verified: dict = field(default_factory=dict)
     origin: str = "bundled"
@@ -66,7 +65,7 @@ class Recipe:
         return ""
 
 
-def _dirs() -> List[str]:
+def _dirs() -> list[str]:
     env = os.environ.get("IBREW_REGISTRY_DIR")
     cands = ([env] if env else []) + _REG_DIRS + [_USER_DIR]
     seen, out = set(), []
@@ -77,7 +76,7 @@ def _dirs() -> List[str]:
     return out
 
 
-def load(name: str) -> Optional[Recipe]:
+def load(name: str) -> Recipe | None:
     for d in _dirs():
         p = os.path.join(d, f"{name}.json")
         if os.path.exists(p):
@@ -93,9 +92,9 @@ def load(name: str) -> Optional[Recipe]:
     return None
 
 
-def all_recipes() -> Dict[str, Recipe]:
+def all_recipes() -> dict[str, Recipe]:
     """Every known recipe; the last directory in search order wins (user > bundled)."""
-    out: Dict[str, Recipe] = {}
+    out: dict[str, Recipe] = {}
     for d in _dirs():
         for fn in sorted(os.listdir(d)):
             if not fn.endswith(".json"):
@@ -106,7 +105,7 @@ def all_recipes() -> Dict[str, Recipe]:
     return out
 
 
-def save(recipe: Recipe, path_dir: Optional[str] = None) -> str:
+def save(recipe: Recipe, path_dir: str | None = None) -> str:
     first_writable = next((d for d in _REG_DIRS if os.access(d, os.W_OK)), "")
     d = path_dir or (os.environ.get("IBREW_REGISTRY_DIR") if os.environ.get("IBREW_REGISTRY_DIR")
                      else first_writable or _USER_DIR)

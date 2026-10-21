@@ -10,10 +10,13 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING
 
 from . import net
-from .util import PlatformInfo, Result, run, warn
+
+if TYPE_CHECKING:        # annotations only: importing sources here would be circular
+    from . import sources
+from .util import PlatformInfo, run, warn
 
 # Current homebrew-core bottle tags (Homebrew 4/5, tested 2026):
 #   {arch}_{macos}, osx->golden_gate(10.16), ventura(13), sonoma(14), sequoia(15), tahoe(26),
@@ -28,7 +31,7 @@ TAG_TO_MACOS["osx"] = 10
 INTEL_SUPPORTED_MAX_MACOS = 15
 
 
-def tag_for(pf: PlatformInfo) -> Optional[str]:
+def tag_for(pf: PlatformInfo) -> str | None:
     """Bottle tag this machine would look for, e.g. ``ventura`` (Intel) or ``arm64_sequoia``."""
     if pf.system != "Darwin" or not pf.macos_version:
         return None
@@ -39,8 +42,8 @@ def tag_for(pf: PlatformInfo) -> Optional[str]:
     return f"arm64_{name}" if pf.arch == "arm64" else name
 
 
-def formula_tag_set(tags) -> Dict[str, bool]:
-    out: Dict[str, bool] = {}
+def formula_tag_set(tags) -> dict[str, bool]:
+    out: dict[str, bool] = {}
     for t in tags:
         out[t] = True
     return out
@@ -50,7 +53,7 @@ def formula_tag_set(tags) -> Dict[str, bool]:
 # JSON APIs (formulae.brew.sh, with mirror fallback)
 # --------------------------------------------------------------------------- #
 
-def api_bases() -> List[str]:
+def api_bases() -> list[str]:
     env = os.environ.get("IBREW_BREW_API_MIRRORS")
     if env:
         return [v.strip().rstrip("/") for v in env.split(",") if v.strip()]
@@ -61,7 +64,7 @@ def api_bases() -> List[str]:
     ]
 
 
-def formula_json(name: str, ttl_days: int = 1) -> Optional[dict]:
+def formula_json(name: str, ttl_days: int = 1) -> dict | None:
     """``/api/formula/<name>.json``; also follows ``aliases``/``oldnames`` renames."""
     cache = os.path.join(net.cache_dir("brew"), re.sub(r"[^A-Za-z0-9_.@-]", "_", name) + ".json")
     if net._ttl_fresh(cache, ttl_days * 86400):
@@ -88,7 +91,7 @@ def formula_json(name: str, ttl_days: int = 1) -> Optional[dict]:
     return None
 
 
-def formula_index() -> List[dict]:
+def formula_index() -> list[dict]:
     """Full core formula list (used once, for the platform-support census)."""
     cache = os.path.join(net.cache_dir("brew"), "formula-index.json")
     if net._ttl_fresh(cache, 3 * 86400):
@@ -120,14 +123,14 @@ def formula_index() -> List[dict]:
 class BottleInfo:
     name: str
     version: str
-    tags: List[str]
+    tags: list[str]
     deprecated: bool = False
     disabled: bool = False
 
-    def has(self, tag: Optional[str]) -> bool:
+    def has(self, tag: str | None) -> bool:
         return bool(tag) and tag in self.tags
 
-    def nearest_tag(self, pf: PlatformInfo) -> Optional[str]:
+    def nearest_tag(self, pf: PlatformInfo) -> str | None:
         """Best *other* bottle tag for this machine (for 'bottle found, 1 version behind')."""
         cands = [t for t in self.tags if t.startswith("arm64_") == (pf.arch == "arm64")]
         cands = [t for t in cands if t in TAG_TO_MACOS or t.endswith("_linux")]
@@ -140,7 +143,7 @@ class BottleInfo:
         return older[0] if older else None
 
 
-def bottle_info(name: str) -> Optional[BottleInfo]:
+def bottle_info(name: str) -> BottleInfo | None:
     d = formula_json(name)
     if not d:
         return None
@@ -158,9 +161,9 @@ def bottle_info(name: str) -> Optional[BottleInfo]:
 # Installed state
 # --------------------------------------------------------------------------- #
 
-def installed_formulae() -> Dict[str, str]:
+def installed_formulae() -> dict[str, str]:
     r = run(["brew", "list", "--formula", "--versions"], timeout=120)
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     if not r.ok:
         return out
     for line in r.stdout.splitlines():
@@ -197,11 +200,11 @@ def keg(name: str, version: str) -> str:
 @dataclass
 class Census:
     pf: dict
-    tag: Optional[str]
+    tag: str | None
     total: int
-    binary: List[str] = field(default_factory=list)
-    compile: List[str] = field(default_factory=list)
-    disabled: List[str] = field(default_factory=list)
+    binary: list[str] = field(default_factory=list)
+    compile: list[str] = field(default_factory=list)
+    disabled: list[str] = field(default_factory=list)
 
     @property
     def binary_pct(self) -> float:
@@ -233,7 +236,7 @@ def ghcr_repo(formula: str) -> str:
     return f"{m.group(1)}/{m.group(2)}" if m else formula
 
 
-def ghcr_token(repo: str) -> Optional[str]:
+def ghcr_token(repo: str) -> str | None:
     import json as _json
 
     r = net.request(f"https://ghcr.io/token?scope=repository:homebrew/core/{repo}:pull",
@@ -246,13 +249,13 @@ def ghcr_token(repo: str) -> Optional[str]:
         return None
 
 
-def tap_for(formula: str) -> Optional[str]:
+def tap_for(formula: str) -> str | None:
     if "/" in formula:
         return formula.rsplit("/", 1)[0]
     return None
 
 
-def brew_bottle(formula: str, pf: PlatformInfo) -> Optional["sources.Candidate"]:
+def brew_bottle(formula: str, pf: PlatformInfo) -> sources.Candidate | None:
     """Thin re-export so callers can stay in the ``brew`` namespace."""
     from . import sources
 
