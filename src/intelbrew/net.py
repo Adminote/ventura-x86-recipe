@@ -47,6 +47,58 @@ OFFLINE = os.environ.get("IBREW_OFFLINE", "").lower() in ("1", "true", "yes")
 # stale certifi" failure). macOS ships a good trust store in the security keys.
 # --------------------------------------------------------------------------- #
 
+def system_proxy() -> dict[str, str]:
+    """Proxy to use for HTTP(S): env vars first, then the macOS system settings.
+
+    macOS users usually configure the proxy in System Settings, which sets no
+    environment variable. Without this, every request from a terminal looks
+    broken ("timeout", "connection reset") even though Safari works fine.
+    """
+    env = os.environ
+    out: dict[str, str] = {}
+    for scheme, keys in (("https", ("https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")),
+                         ("http", ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"))):
+        for k in keys:
+            v = env.get(k)
+            if v:
+                out[scheme] = v if "://" in v else f"http://{v}"
+                break
+    if out:
+        return out
+    if sys.platform == "darwin" and shutil.which("scutil"):
+        try:
+            cfg = subprocess.run(["scutil", "--proxy"], capture_output=True, text=True,
+                                 timeout=10).stdout
+        except (OSError, subprocess.SubprocessError):
+            return {}
+        def val(key: str) -> str:
+            m = re.search(rf"{key}\s*:\s*(\S+)", cfg)
+            return m.group(1) if m else ""
+        for scheme, enable, host, port in (("https", "HTTPSEnable", "HTTPSProxy", "HTTPSPort"),
+                                           ("http", "HTTPEnable", "HTTPProxy", "HTTPPort")):
+            if val(enable) == "1" and val(host):
+                out[scheme] = f"http://{val(host)}:{val(port) or '80'}"
+    return out
+
+
+_PROXY: dict[str, str] | None = None
+
+
+def proxy() -> dict[str, str]:
+    global _PROXY
+    if _PROXY is None:
+        _PROXY = system_proxy()
+    return _PROXY
+
+
+def _curl_proxy_args(scheme: str = "https") -> list[str]:
+    p = proxy()
+    url = p.get(scheme) or p.get("http")
+    if not url:
+        return []
+    return ["-x", url, "--noproxy", "localhost,127.0.0.1"]
+
+
 def _ssl_context() -> ssl.SSLContext:
     ctx = ssl.create_default_context()
     try:
@@ -113,20 +165,67 @@ def _ttl_fresh(path: str, ttl: int) -> bool:
 # --------------------------------------------------------------------------- #
 
 def request(url: str, *, timeout: float = DEFAULT_TIMEOUT, retries: int = DEFAULT_RETRIES,
-            headers: dict[str, str] | None = None) -> Fetch:
+            headers: dict[str, str] | None = None, show_progress: bool = False) -> Fetch:
+    """GET a URL. Uses curl when available (fast, proxy-aware, resume-free)."""
     if OFFLINE:
         return Fetch(False, url, error="offline mode")
-    hdrs = {"User-Agent": UA, "Accept-Encoding": "identity"}
+    hdrs = {"User-Agent": UA}
     if headers:
         hdrs.update(headers)
+    if shutil.which("curl") and not os.environ.get("IBREW_FORCE_URLLIB"):
+        return _request_curl(url, hdrs, timeout, retries, show_progress)
+    return _request_urllib(url, hdrs, timeout, retries)
+
+
+def _request_curl(url: str, hdrs: dict[str, str], timeout: float, retries: int,
+                  show_progress: bool) -> Fetch:
+    last = ""
+    for attempt in range(retries + 1):
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            body_path = tmp.name
+        cmd = ["curl", "-sS", "--http1.1", "--location", "--max-time", str(int(timeout)),
+               "--connect-timeout", "15", "--output", body_path, "--write-out", "%{http_code}"]
+        if show_progress:
+            cmd[1] = "-sS#"                       # progress bar instead of silence
+        for k, v in hdrs.items():
+            cmd += ["-H", f"{k}: {v}"]
+        cmd += _curl_proxy_args(url.split(":")[0].lower())
+        cmd.append(url)
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 15)
+            status = int((p.stdout or "0").strip().splitlines()[-1] or 0) if p.stdout.strip() else 0
+            if p.returncode != 0 and status == 0:
+                last = (p.stderr or "").strip().splitlines()[-1:] or ["curl failed"]
+                last = last[0] if isinstance(last, list) else last
+                time.sleep(0.8 * (attempt + 1))
+                continue
+            with open(body_path, "rb") as fh:
+                body = fh.read()
+            if 200 <= status < 300:
+                return Fetch(True, url, status, body)
+            return Fetch(False, url, status, b"", f"HTTP {status}")
+        except subprocess.TimeoutExpired:
+            last = f"timeout after {timeout:.0f}s"
+        except OSError as e:
+            last = f"{type(e).__name__}: {e}"
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(body_path)
+        if attempt < retries:
+            time.sleep(0.8 * (attempt + 1))
+    return Fetch(False, url, 0, error=last)
+
+
+def _request_urllib(url: str, hdrs: dict[str, str], timeout: float, retries: int) -> Fetch:
+    handler = urllib.request.ProxyHandler(proxy()) if proxy() else urllib.request.ProxyHandler({})
+    opener = urllib.request.build_opener(handler, urllib.request.HTTPSHandler(context=_CTX))
     last = ""
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, headers=hdrs)
-            with urllib.request.urlopen(req, timeout=timeout, context=_CTX) as resp:
+            with opener.open(req, timeout=timeout) as resp:
                 return Fetch(True, resp.geturl(), resp.status, resp.read())
         except urllib.error.HTTPError as e:
-            # 404 is a definitive answer: do not retry, do not mask it
             if e.code in (401, 403, 404, 410, 429):
                 return Fetch(False, url, e.code, error=f"HTTP {e.code}")
             last = f"HTTP {e.code}"
@@ -243,7 +342,10 @@ def _download_urllib(urls, dest, digest, algo, total, show, headers, race) -> tu
             if headers:
                 hdrs.update(headers)
             req = urllib.request.Request(u, headers=hdrs)
-            with urllib.request.urlopen(req, timeout=min(30, total), context=_CTX) as resp, \
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler(proxy()) if proxy() else urllib.request.ProxyHandler({}),
+                urllib.request.HTTPSHandler(context=_CTX))
+            with opener.open(req, timeout=min(30, total)) as resp, \
                     open(tmp, "wb") as out:
                 clen = int(resp.headers.get("Content-Length") or 0)
                 done = 0

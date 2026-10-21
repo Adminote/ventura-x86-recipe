@@ -261,7 +261,7 @@ def cmd_setup(args) -> int:
             ibrew = os.path.join(installer.bin_dir(), "ibrew")
             os.makedirs(installer.bin_dir(), exist_ok=True)
             _wrap_ibrew(ibrew)
-            brewshim.install_shadow(ibrew)
+            brewshim.install_shadow()
             ok(f"brew shim ready: {os.path.join(brewshim.shadow_dir(), 'brew')}")
         except Exception as e:
             err(f"brew shim: {e}")
