@@ -40,6 +40,7 @@ to touch.
 | `kind` | `archive` (verified tarball/zip), `npm-global`, or `bottle` (brew ghcr) |
 | `url` / `fallback_urls` | primary and interchangeable mirrors (identical bytes) |
 | `sha256` | **required** for `archive`; the install is refused without it |
+| `fmt` | `"raw"` when the URL *is* the binary (no archive); omit for tarballs/zips |
 | `strip` | number of leading directories to drop (1 = classic release tarball) |
 | `install.bin` | paths inside the archive that become commands; omit to auto-detect |
 | `requires_macos` | hard floor; the step is refused below it |
@@ -77,6 +78,6 @@ exact file to commit.
 
 ## Recipes we want first
 
-`node@20`, `node@22`, `uv`, `gh`, `jq`, `yq`, `fzf`, `fd`, `bat`, `ruby` (ruby-build),
+`node@20`, `node@22`, `uv`, `jq`, `gh`, `yq`, `fzf`, `fd`, `bat`, `ruby` (ruby-build),
 `openjdk@21`. Tools where upstream Intel support is uncertain (`ffmpeg`, `python@3.x`)
 need a note explaining the trade-off, not a silent recipe.

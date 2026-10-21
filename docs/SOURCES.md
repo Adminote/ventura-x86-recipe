@@ -13,6 +13,7 @@ exercised. “Tested” means: run end-to-end on an Intel Mac (macOS 13.7, Ventu
 | `registry` | anything with a curated recipe | same | sha256 (recipe) | optional GPG/codesign | tested (`doctor`) |
 | `brew-bottle` | formula has a bottle for this or an older macOS | same | Homebrew bottle digests | Homebrew / ghcr TLS | implemented; download speed depends on route to ghcr.io |
 | `node-dist` | `node`, `node@18/20/22/24` | same | sha256 from `SHASUMS256.txt` | Apple signature `HX7739G8FX` verified | **tested** |
+| `github-release` (raw asset) | tools that ship an extensionless binary (jq, some Go CLIs) | same | sha256 from `asset.digest` | none | **tested** (`jq` 1.8.2) |
 | `github-release` | single-binary CLIs (uv, ripgrep, fd, jq, gh, …) | same | sha256 from `asset.digest` | none (digest only) | **tested** |
 | `adoptium-jdk` | `openjdk`, `openjdk@21` | same | sha256 from Adoptium API | Temurin builds | implemented |
 | `pypi-zipapp` / `pypi-wheel` | Python CLIs (poetry, pre-commit, …) | same CLI | sha256 from PyPI JSON | none | implemented |
@@ -27,6 +28,7 @@ exercised. “Tested” means: run end-to-end on an Intel Mac (macOS 13.7, Ventu
 | `.tar.xz` / `.txz` | ✅ | stdlib `lzma` |
 | `.tar.bz2` | ✅ | stdlib |
 | `.tar.zst` | ✅ | Python ≥ 3.14 native, else `zstandard` package |
+| **raw single binary** (no archive) | ✅ | e.g. `jq-macos-amd64`; recipe declares `"fmt": "raw"` and the command name |
 | `.zip` (incl. zip64) | ✅ | symlinks restored from unix mode bits |
 | `.pkg` / `.dmg` | ❌ | installers, not archives — refused on purpose |
 | `.7z` / `.rar` | ❌ | refused |

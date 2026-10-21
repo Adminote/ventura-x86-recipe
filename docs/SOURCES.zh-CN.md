@@ -12,6 +12,7 @@ intelbrew 获取二进制的全部途径、各自的保证，以及是否真的�
 | `registry` | 有内置 recipe 的任何东西 | 一致 | sha256（recipe 内） | 可选 GPG/codesign | 已实测（`doctor`） |
 | `brew-bottle` | 该配方有本平台或更老 macOS 的 bottle | 一致 | Homebrew bottle 摘要 | Homebrew / ghcr TLS | 已实现；速度取决于到 ghcr.io 的线路 |
 | `node-dist` | `node`、`node@18/20/22/24` | 一致 | 来自 `SHASUMS256.txt` 的 sha256 | 已校验 Apple 签名 `HX7739G8FX` | **已实测** |
+| `github-release`（裸资产） | 直接发无扩展名二进制的工具（jq、部分 Go CLI） | 一致 | 来自 `asset.digest` 的 sha256 | 无 | **已实测**（`jq` 1.8.2） |
 | `github-release` | 单文件 CLI（uv、ripgrep、fd、jq、gh…） | 一致 | 来自 `asset.digest` 的 sha256 | 无（仅摘要） | **已实测** |
 | `adoptium-jdk` | `openjdk`、`openjdk@21` | 一致 | Adoptium API 的 sha256 | Temurin 构建 | 已实现 |
 | `pypi-zipapp` / `pypi-wheel` | Python CLI（poetry、pre-commit…） | CLI 一致 | PyPI JSON 的 sha256 | 无 | 已实现 |
@@ -26,6 +27,7 @@ intelbrew 获取二进制的全部途径、各自的保证，以及是否真的�
 | `.tar.xz` / `.txz` | ✅ | 标准库 `lzma` |
 | `.tar.bz2` | ✅ | 标准库 |
 | `.tar.zst` | ✅ | Python ≥ 3.14 原生，否则需 `zstandard` 包 |
+| **裸二进制**（无压缩包） | ✅ | 例如 `jq-macos-amd64`；recipe 里写 `"fmt": "raw"` 和命令名 |
 | `.zip`（含 zip64） | ✅ | 依据 unix 权限位还原符号链接 |
 | `.pkg` / `.dmg` | ❌ | 是安装器不是压缩包，明确拒绝 |
 | `.7z` / `.rar` | ❌ | 明确拒绝 |

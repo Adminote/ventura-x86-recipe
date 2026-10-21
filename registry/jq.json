@@ -1,0 +1,28 @@
+{
+  "name": "jq",
+  "version": "1.8.2",
+  "requires": {
+    "macos": ">=11"
+  },
+  "verified": {
+    "by": "ibrew doctor",
+    "at": "2026-10-21",
+    "machine": "macOS 13.7.8 x86_64"
+  },
+  "steps": [
+    {
+      "kind": "archive",
+      "source": "github-release",
+      "url": "https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-macos-amd64",
+      "fallback_urls": [
+        "https://gh-proxy.com/https://github.com/jqlang/jq/releases/download/jq-1.8.2/jq-macos-amd64"
+      ],
+      "sha256": "e94b266e3c26690550006abe63152b782280f4e14374accdf04cbde844f00bc0",
+      "fmt": "raw",
+      "bin": [
+        "jq"
+      ],
+      "requires_macos": 11
+    }
+  ]
+}

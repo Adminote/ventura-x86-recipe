@@ -39,6 +39,7 @@ recipe 是一份**经过机器验证的断言**：某个配方如何从二进制
 | `kind` | `archive`（带校验的包）、`npm-global`、或 `bottle`（brew ghcr） |
 | `url` / `fallback_urls` | 主地址和可互换镜像（字节必须一致） |
 | `sha256` | `archive` **必填**；没有摘要就拒绝安装 |
+| `fmt` | 当 URL **就是**二进制本身（没有压缩包）时写 `"raw"`；tar/zip 省略 |
 | `strip` | 去掉几层顶层目录（1 = 标准 release 包） |
 | `install.bin` | 包内哪些路径变成命令；省略则自动探测 |
 | `requires_macos` | 硬下限；低于它直接拒绝该步骤 |
@@ -75,6 +76,6 @@ ibrew add ripgrep \
 
 ## 优先想要的 recipe
 
-`node@20`、`node@22`、`uv`、`gh`、`jq`、`yq`、`fzf`、`fd`、`bat`、`ruby`（ruby-build）、
+`node@20`、`node@22`、`uv`、`jq`、`gh`、`yq`、`fzf`、`fd`、`bat`、`ruby`（ruby-build）、
 `openjdk@21`。上游 Intel 支持不确定的（`ffmpeg`、`python@3.x`）需要写清取舍说明，
 而不是悄悄加一条 recipe。

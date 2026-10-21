@@ -211,3 +211,37 @@ def test_verify_levels():
     assert verify.ensure_trusted_level("", "none", []) == "unverified"
     assert verify.ensure_trusted_level("sha256", "none", []) == "digest-only"
     assert verify.ensure_trusted_level("sha256", "gpg:ABC", []) == "verified"
+
+
+# --------------------------------------------------------------------------- #
+# raw single-binary releases (no archive)
+# --------------------------------------------------------------------------- #
+
+def test_raw_asset_is_accepted_and_marked_non_archive():
+    assets = [{"name": "jq-macos-arm64"}, {"name": "jq-macos-amd64"},
+              {"name": "jq-linux-amd64"}, {"name": "jq-win64.exe"},
+              {"name": "sha256sum.txt"}, {"name": "jq-attestation.json"},
+              {"name": "jq-1.8.2.tar.gz"}]
+    names = [a["name"] for a in sources.filter_assets(assets, _pf())]
+    assert "jq-macos-amd64" in names
+    assert "jq-macos-arm64" not in names          # other architecture
+    assert "sha256sum.txt" not in names           # metadata, not payload
+    assert "jq-attestation.json" not in names
+    assert sources.is_archive("jq-1.8.2.tar.gz") is True
+    assert sources.is_archive("jq-macos-amd64") is False
+
+
+def test_clean_version_handles_prefixed_tags():
+    assert sources._clean_version("v15.2.0") == "15.2.0"
+    assert sources._clean_version("jq-1.8.2") == "1.8.2"
+    assert sources._clean_version("1.8.2") == "1.8.2"
+
+
+def test_jq_recipe_is_a_raw_binary():
+    r = registry.load("jq")
+    assert r is not None
+    step = r.steps[0]
+    assert step["fmt"] == "raw"
+    assert step["bin"] == ["jq"]
+    assert len(step["sha256"]) == 64
+    assert r.check_requirements(_pf()) == ""

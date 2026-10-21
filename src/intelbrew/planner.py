@@ -73,6 +73,8 @@ def candidate_to_step(cand: sources.Candidate, formula: str) -> dict:
         "fallback_urls": cand.fallbacks,
         "sha256": cand.digest,
         "fmt": cand.fmt,
+        "filename": cand.meta.get("asset") or "",
+        "bin": cand.meta.get("bin") or [],
         "provenance": cand.provenance,
         "version": cand.version,
         "gpg": cand.meta.get("gpg"),

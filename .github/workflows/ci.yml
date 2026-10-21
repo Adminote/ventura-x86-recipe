@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Weekly: catches upstream URL rot even when nothing is being changed here.
+    - cron: "0 3 * * 1"
 
 jobs:
   unit:
@@ -31,23 +34,46 @@ jobs:
   recipes:
     name: recipe validation (Intel macOS)
     runs-on: macos-13            # last Intel runner image
-    continue-on-error: true      # upstream URLs rot; the job reports, does not block
+    # Upstream URLs rot for reasons unrelated to this repo. On PRs that must not
+    # block anyone (the failure is still visible as a red job); on main/schedule
+    # it does block, because that is exactly the signal we want.
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: validate every bundled recipe on this machine
+        id: doctor
         env:
           INTELBREW_HOME: ${{ runner.temp }}/intelbrew
         run: |
           export PYTHONPATH=src
+          failed=""
           for f in registry/*.json; do
             name=$(basename "$f" .json)
             echo "::group::$name"
-            python -m intelbrew.cli doctor "$name" || echo "::warning file=registry/$name.json::doctor reported problems for $name"
+            if ! python -m intelbrew.cli doctor "$name"; then
+              echo "::warning file=registry/$name.json::recipe '$name' failed validation"
+              failed="$failed $name"
+            fi
             echo "::endgroup::"
           done
+          echo "failed=$failed" >> "$GITHUB_OUTPUT"
+          [ -z "$failed" ] || { echo "recipes needing attention:$failed"; exit 1; }
+
+      - name: open an issue when a scheduled run finds rotten recipes
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title "recipe validation failed ($(date -u +%F))" \
+            --body "Weekly validation on macos-13 failed for:${{ steps.doctor.outputs.failed || ' see logs' }}
+
+          Upstream release assets move or disappear; update the recipe (see docs/RECIPES.md) or remove it.
+          Logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --label bug || true
 
   lint:
     runs-on: ubuntu-latest

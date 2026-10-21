@@ -285,9 +285,23 @@ def install_archive(step: dict, formula: str, pf: PlatformInfo, *, allow_unverif
     stage = os.path.join(work, "stage")
     os.makedirs(ex, exist_ok=True)
     os.makedirs(stage, exist_ok=True)
-    info(f"extracting {os.path.basename(dl)}")
-    archive.extract(dl, ex)
-    if team:
+    raw = step.get("fmt") == "raw"
+    if raw:
+        # A release asset that *is* the binary (jq-macos-amd64, go tools, …):
+        # no archive to unpack, the command name comes from the recipe or the formula.
+        names = step.get("bin") or [formula]
+        if isinstance(names, str):
+            names = [names]
+        os.makedirs(os.path.join(stage, "bin"), exist_ok=True)
+        for n in names:
+            dest_bin = os.path.join(stage, "bin", os.path.basename(n))
+            shutil.copy2(dl, dest_bin)
+            archive.ensure_executable(dest_bin)
+        info(f"installing single binary {os.path.basename(dl)} → {', '.join(names)}")
+    else:
+        info(f"extracting {os.path.basename(dl)}")
+        archive.extract(dl, ex)
+    if team and not raw:
         b = verify.first_binary(os.path.join(ex, step.get("strip") and archive.flatten_root(ex) or ex, "bin")) \
             or verify.first_binary(archive.flatten_root(ex))
         found = verify.codesign_team(b) if b else None
@@ -297,7 +311,14 @@ def install_archive(step: dict, formula: str, pf: PlatformInfo, *, allow_unverif
             warn(f"{formula}: signed by unexpected team {found} (expected {team})")
         else:
             rep.notes.append("codesign: no Apple signature (fine for most OSS tools)")
-    bins, mode = _install_archive_dir(ex, formula, step, pf, stage)
+    if raw:
+        declared = step.get("bin") or [formula]
+        if isinstance(declared, str):
+            declared = [declared]
+        bins = {n: os.path.join("bin", os.path.basename(n)) for n in declared}
+        mode = "bin"
+    else:
+        bins, mode = _install_archive_dir(ex, formula, step, pf, stage)
     archives_dir = os.path.join(root(), "opt")
     dest = os.path.join(archives_dir, formula)
     if os.path.exists(dest):

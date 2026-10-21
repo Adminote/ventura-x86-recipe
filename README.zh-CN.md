@@ -126,7 +126,8 @@ Homebrew 只在你想用 `brew` 垫片时才需要。
 | 场景 | 支持 | 方式 |
 |---|---|---|
 | Intel macOS 12–15 上的 Node/npm/npx | ✅ 已实测 | nodejs.org / TUNA / npmmirror 官方构建，多镜像赛跑 |
-| 单文件 CLI 工具（`ripgrep`、`fd`、`jq`、`gh`、`uv`…） | ✅ 已实测 | 官方 GitHub Release 资产 + GitHub 资产摘要里的 `sha256` |
+| 单文件 CLI 工具（`ripgrep`、`fd`、`gh`、`uv`…） | ✅ 已实测 | 官方 GitHub Release 资产 + GitHub 资产摘要里的 `sha256` |
+| 只发裸二进制、没有压缩包的工具（`jq`） | ✅ 已实测 | `"fmt": "raw"` recipe：资产本身就是可执行文件 |
 | Java（`openjdk`） | ✅ | Eclipse Temurin x64 构建 |
 | 依赖 Homebrew 库的工具（`ffmpeg`、`imagemagick`） | ⚠️ 部分 | conda-forge `osx-64` 包（独立运行时，不与 brew 链接） |
 | Python（`python@3.x`） | ⚠️ 部分 | 上游独立构建，不等于替换 brew 配方 |

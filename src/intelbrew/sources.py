@@ -303,30 +303,50 @@ def asset_arch_tokens(pf: PlatformInfo) -> List[str]:
     return ["amd64", "x86_64", "x64", "intel", "386", "i386"]
 
 
+ARCHIVE_EXTS = (".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2", ".tar.zst",
+                ".zip", ".tar")
+# Files that are never the payload, even without an extension
+NOT_PAYLOAD = ("sha256", "sha512", "checksums", "attestation", "sbom", "license", "readme",
+               "changelog", "source", "src")
+
+
 def filter_assets(assets: List[dict], pf: PlatformInfo) -> List[dict]:
-    """Keep assets that are macOS + this architecture + a supported archive."""
+    """Keep assets that are macOS + this architecture.
+
+    Both archives and *raw* (extensionless) single binaries are accepted: many
+    upstream projects publish ``tool-macos-amd64`` with no archive at all (jq,
+    some Go tools). Installers/extended attributes (.pkg/.dmg/.msi/.exe) and
+    metadata files (.sha256/SHA256SUMS/attestation) are never payloads.
+    """
     words_os = ["darwin", "macos", "osx", "apple"]
     arch_ok = asset_arch_tokens(pf)
-    ext_ok = (".tar.gz", ".tgz", ".tar.xz", ".zip", ".tar.bz2")
     out = []
     for a in assets:
-        n = (a.get("name") or "").lower()
-        if a.get("name", "").endswith((".sig", ".sha256", ".sha256sum", ".asc", ".sbom",
-                                       ".intoto.jsonl", ".pem", ".pkg", ".dmg", ".msi")):
+        raw = a.get("name") or ""
+        n = raw.lower()
+        if n.endswith((".sig", ".sha256", ".sha512", ".sha256sum", ".asc", ".sbom",
+                       ".intoto.jsonl", ".pem", ".pkg", ".dmg", ".msi", ".exe", ".deb",
+                       ".rpm", ".apk", ".msi")):
             continue
-        if not n.endswith(ext_ok):
+        if any(w in n for w in NOT_PAYLOAD) and not n.endswith(ARCHIVE_EXTS):
+            continue
+        if not n.endswith(ARCHIVE_EXTS) and "." in os.path.basename(n):
+            # unknown dotted suffix (e.g. .txt, .json, .7z) — not a supported payload
             continue
         if not any(w in n for w in words_os):
             continue
-        # arch must match; reject the other arch explicitly
         other = ["arm64", "aarch64"] if pf.arch == "x86_64" else ["amd64", "x86_64", "x64"]
         toks = re.split(r"[^a-z0-9]+", n)
-        if not any(a in toks or f"_{a}" in n or f"-{a}" in n for a in arch_ok):
+        if not any(t in toks or f"_{t}" in n or f"-{t}" in n for t in arch_ok):
             continue
         if any(o in toks for o in other):
             continue
         out.append(a)
     return out
+
+
+def is_archive(name: str) -> bool:
+    return name.lower().endswith(ARCHIVE_EXTS)
 
 
 def _prefer(names: List[str], patterns: List[str]) -> Optional[int]:
@@ -362,9 +382,13 @@ def github_release_repo(repo: str, pf: PlatformInfo, version: str = "") -> Optio
     if not assets:
         return None
     names = [a["name"] for a in assets]
-    idx = _prefer(names, ASSET_GLOBS["darwin"].get(pf.arch, []))
-    if idx is None:
-        return None
+    # prefer real archives; fall back to a raw single binary
+    archived = [n for n in names if is_archive(n)]
+    idx = _prefer(archived, ASSET_GLOBS["darwin"].get(pf.arch, [])) if archived else None
+    if idx is not None:
+        idx = names.index(archived[idx])
+    else:
+        idx = 0
     asset = assets[idx]
     digest = sha256_file_like(asset) or _digest_from_sha_asset(rel["assets"], asset["name"])
     direct = asset["browser_download_url"]
@@ -375,11 +399,22 @@ def github_release_repo(repo: str, pf: PlatformInfo, version: str = "") -> Optio
         fallbacks=mirrors[1:],
         digest=digest,
         provenance="none",
-        version=(rel.get("tag_name") or "").lstrip("v"),
-        fmt="", notes=f"official GitHub release asset {asset['name']}",
+        version=_clean_version(rel.get("tag_name") or ""),
+        fmt="" if is_archive(asset["name"]) else "raw",
+        notes=f"official GitHub release asset {asset['name']}"
+              + (" (single binary, no archive)" if not is_archive(asset["name"]) else ""),
         meta={"asset": asset["name"], "repo": repo,
               "release_url": rel.get("html_url", "")},
     )
+
+
+def _clean_version(tag: str) -> str:
+    """``v1.2.3`` → ``1.2.3``; ``jq-1.8.2`` → ``1.8.2``; ``tool-v2`` → ``2``."""
+    t = tag.strip()
+    m = re.match(r"^[A-Za-z][A-Za-z0-9_.]*-v?(\d.*)$", t)
+    if m:
+        return m.group(1)
+    return t.lstrip("v")
 
 
 def _digest_from_sha_asset(assets: List[dict], name: str) -> str:

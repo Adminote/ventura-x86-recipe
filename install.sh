@@ -7,7 +7,8 @@ PREFIX="${HOME}/.local"
 PYTHON=""
 ADD_PATH=1
 DO_UNINSTALL=0
-REPO="${INTELBREW_REPO:-https://github.com/intelbrew/intelbrew}"
+REPO="${INTELBREW_REPO:-https://github.com/Adminote/ventura-x86-recipe}"
+BRANCH="${INTELBREW_BRANCH:-main}"
 
 usage() {
   cat <<'USAGE'
@@ -86,12 +87,12 @@ if [ ! -d "$SRC_DIR/src/intelbrew" ]; then
   tmp="$(mktemp -d)"
   echo "==> fetching $REPO"
   if command -v git >/dev/null 2>&1; then
-    git clone --depth 1 "$REPO" "$tmp/intelbrew" >/dev/null 2>&1 || {
-      curl -fsSL "$REPO/archive/refs/heads/main.tar.gz" | tar xz -C "$tmp" || {
-        echo "error: cannot download sources" >&2; exit 1; }
+    git clone --depth 1 --branch "$BRANCH" "$REPO" "$tmp/intelbrew" >/dev/null 2>&1 || {
+      curl -fsSL "$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar xz -C "$tmp" || {
+        echo "error: cannot download sources from $REPO ($BRANCH)" >&2; exit 1; }
     }
   else
-    curl -fsSL "$REPO/archive/refs/heads/main.tar.gz" | tar xz -C "$tmp"
+    curl -fsSL "$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar xz -C "$tmp"
   fi
   SRC_DIR="$(find "$tmp" -maxdepth 2 -name src -type d | head -1 | xargs dirname)"
 fi

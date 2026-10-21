@@ -133,7 +133,8 @@ verification × tested/untested). Quick version:
 | Case | Supported | How |
 |---|---|---|
 | Node/npm/npx on Intel macOS 12–15 | ✅ tested | official `nodejs.org` / TUNA / npmmirror builds, mirror racing |
-| Single-binary CLI tools (`ripgrep`, `fd`, `jq`, `gh`, `uv`, …) | ✅ tested | official GitHub release asset + `sha256` from GitHub's asset digest |
+| Single-binary CLI tools (`ripgrep`, `fd`, `gh`, `uv`, …) | ✅ tested | official GitHub release asset + `sha256` from GitHub's asset digest |
+| Tools that ship a bare binary, no archive (`jq`) | ✅ tested | `"fmt": "raw"` recipe: the asset *is* the executable |
 | Java (`openjdk`) | ✅ | Eclipse Temurin x64 builds |
 | Tools built on Homebrew-only libs (`ffmpeg`, `imagemagick`) | ⚠️ partial | conda-forge `osx-64` packages (separate runtime, not brew-linked) |
 | Python (`python@3.x`) | ⚠️ partial | upstream standalone builds; not a brew formula replacement |
