@@ -41,6 +41,32 @@ They are official upstream builds, checked against the digest published by the s
 project, optionally against its GPG/Apple signature. Mirrors can only change the *speed*,
 never the bytes. See [LIMITATIONS](LIMITATIONS.md) §4 for the trust model's holes.
 
+**What happens if there is no binary for `node` / `npm` / `npx`?**
+`ibrew node` walks a ladder and never installs a *different* major silently:
+
+1. newest patch of the requested major that upstream ships for this arch;
+2. if that build declares a newer macOS than yours, the next older patch in the same major;
+3. only when nothing works it stops with `Node 99 has no official x86_64 macOS build.
+   Available majors: 26, 25, 24, …` and a hint (`ibrew node use 26`).
+
+And once installed, the `node`/`npm`/`npx` shims are guarded: if the runtime directory is
+deleted or moved, they fail with exit 127 and
+
+```
+intelbrew: the managed Node runtime is missing: /Users/…/.intelbrew/node/v20.20.2/bin/node
+  fix: ibrew node use 20   (or: ibrew node install)
+```
+
+They never fall through to whatever `node` happens to be next on PATH (that would silently
+run the wrong version with the wrong npm). `ibrew doctor` reports each broken shim, and
+`ibrew node list` does too.
+
+**I already use nvm / fnm / asdf — will this fight with them?**
+While intelbrew's PATH block is active its shims win (`~/.intelbrew/bin` comes first).
+`ibrew setup --apply` warns when it detects another version manager. Run
+`ibrew setup --uninstall-profile` to let nvm/fnm own `node` — intelbrew keeps working for
+`brew`/`ibrew install`, it just stops providing `node`.
+
 **Why does `ibrew doctor` say the newest Node cannot run here?**
 Because that Intel build declares a higher minimum macOS (`otool -l … minos`). `ibrew node`
 installs the newest *runnable* one — it measures the deployment target of the build it just

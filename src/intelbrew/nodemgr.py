@@ -50,8 +50,13 @@ def majors_installed() -> list[str]:
     return sorted(os.listdir(d)) if os.path.isdir(d) else []
 
 
-def candidates(pf: PlatformInfo, ceiling: int | None = None) -> list[dict]:
-    """Official releases with a darwin-<arch> build, newest first."""
+def candidates(pf: PlatformInfo, ceiling: int | None = None,
+               exact: int | None = None) -> list[dict]:
+    """Official releases with a darwin-<arch> build, newest first.
+
+    ``ceiling``  — never pick a newer major (used for "newest runnable")
+    ``exact``    — only this major (used when the user asked for node@22)
+    """
     idx = sources.node_index()
     out = []
     for e in idx:
@@ -59,6 +64,8 @@ def candidates(pf: PlatformInfo, ceiling: int | None = None) -> list[dict]:
             continue
         major = int(e["version"].lstrip("v").split(".")[0])
         if ceiling and major > ceiling:
+            continue
+        if exact and major != exact:
             continue
         out.append(e)
     out.sort(key=lambda e: tuple(int(x) for x in re.findall(r"\d+", e["version"])[:3]),
@@ -86,18 +93,46 @@ def ensure_runtime(major: str | None, pf: PlatformInfo | None = None,
     ceiling is upstream's, discovered here instead of hardcoded.
     """
     pf = pf or current_platform()
-    ceiling = int(major) if major else None
-    for cand in candidates(pf, ceiling):
+    wanted = int(major) if major else None
+    available = candidates(pf)
+    majors = sorted({int(e["version"].lstrip("v").split(".")[0]) for e in available},
+                    reverse=True)
+    majors = [m for m in majors if m >= 10][:8] or majors[:8]
+
+    if wanted is not None and wanted not in majors:
+        # Asking for a major that upstream never built must not silently install
+        # a different one: say what exists and let the user decide.
+        raise NodeUnavailable(
+            f"Node {wanted} has no official {pf.arch} macOS build. "
+            f"Available majors: {', '.join(map(str, majors)) or 'none'}",
+            hint=f"ibrew node use {majors[0]}" if majors else "")
+
+    pool = candidates(pf, exact=wanted) if wanted else available
+    too_new = []
+    for cand in pool:
         try:
             return _install_candidate(cand, pf, force)
         except _TooNew as e:
+            too_new.append(f"{cand['version']} ({e})")
             warn(f"node {cand['version']}: {e}; trying the next older release")
             continue
-    raise RuntimeError(f"no runnable official Node build found for {pf.pretty_name} {pf.arch}")
+    if too_new:
+        raise NodeUnavailable(
+            f"every Node {wanted or ''} build needs a newer macOS than {pf.pretty_name}",
+            hint="run `ibrew node install` without a major to get the newest runnable one")
+    raise NodeUnavailable(f"no official {pf.arch} macOS build of Node found for {pf.pretty_name}")
 
 
 class _TooNew(Exception):
-    pass
+    """The downloaded build declares a newer minimum macOS than this machine."""
+
+
+class NodeUnavailable(RuntimeError):
+    """No build can be installed here, with a user-actionable hint."""
+
+    def __init__(self, message: str, hint: str = ""):
+        super().__init__(message)
+        self.hint = hint
 
 
 def _install_candidate(chosen: dict, pf: PlatformInfo, force: bool) -> str:
@@ -158,9 +193,36 @@ def _install_candidate(chosen: dict, pf: PlatformInfo, force: bool) -> str:
 # shims
 # --------------------------------------------------------------------------- #
 
+NODE_SHIM = """#!/bin/sh
+# intelbrew shim (generated; do not edit) — the managed Node runtime
+NODE="{node}"
+if [ ! -x "$NODE" ]; then
+  # Without this guard a *missing* target makes the shell continue searching
+  # PATH and silently run a different node (wrong version, wrong npm).
+  echo "intelbrew: the managed Node runtime is missing:" >&2
+  echo "  $NODE" >&2
+  echo "  fix: ibrew node use {major_hint}   (or: ibrew node install)" >&2
+  exit 127
+fi
+exec "$NODE" "$@"
+"""
+
 NPM_SHIM = """#!/bin/sh
 # intelbrew shim (generated; do not edit) — runs npm/npx on the managed Node runtime
-exec "{node}" "{cli}" "$@"
+NODE="{node}"
+CLI="{cli}"
+if [ ! -x "$NODE" ]; then
+  echo "intelbrew: the managed Node runtime for {name} is missing:" >&2
+  echo "  $NODE" >&2
+  echo "  fix: ibrew node use {major_hint}   (or: ibrew node install)" >&2
+  exit 127
+fi
+if [ ! -f "$CLI" ]; then
+  echo "intelbrew: {name} is not shipped with this Node build ($CLI)" >&2
+  echo "  fix: ibrew node use {major_hint}" >&2
+  exit 127
+fi
+exec "$NODE" "$CLI" "$@"
 """
 
 
@@ -183,21 +245,30 @@ def write_shims(kind: str = "shim", major: str | None = None,
     link = os.path.join(bdir, "node")
     if os.path.lexists(link):
         os.unlink(link)
-    os.symlink(node, link)
+    with open(link, "w") as fh:
+        fh.write(NODE_SHIM.format(node=node, major_hint=ver.split(".")[0].lstrip("v")))
+    os.chmod(link, 0o755)
     made.append(link)
 
-    want = {"npm", "npx", "corepack"} if kind in ("shim", "npm", "install", "use", "update") else {kind}
+    want = ({"npm", "npx", "corepack"} if kind in ("shim", "npm", "install", "use", "update")
+            else {kind})
+    missing = []
     for name in sorted(want):
         cli = os.path.join(prefix, "lib", "node_modules", "npm", "bin", f"{name}-cli.js")
         if name == "corepack":
             cli = os.path.join(prefix, "lib", "node_modules", "corepack", "dist", "corepack.js")
         if not os.path.isfile(cli):
+            missing.append(name)
             continue
         p = os.path.join(bdir, name)
         with open(p, "w") as fh:
-            fh.write(NPM_SHIM.format(node=node, cli=cli))
+            fh.write(NPM_SHIM.format(node=node, cli=cli, name=name,
+                                     major_hint=ver.split(".")[0].lstrip("v")))
         os.chmod(p, 0o755)
         made.append(p)
+    if missing:
+        warn(f"this Node build does not ship: {', '.join(missing)} "
+             f"(other runtimes still work; `ibrew node use <major>` switches)")
     ok(f"node {ver} activated in {bdir}: {', '.join(os.path.basename(m) for m in made)}")
     return made
 
@@ -261,4 +332,26 @@ def shim_status() -> dict[str, str]:
         p = os.path.join(bdir, name)
         out[name] = ("ours" if os.path.exists(p) else
                      "shadowed by " + (shutil.which(name) or "?"))
+    return out
+
+
+def runtime_health() -> list[dict]:
+    """Per-shim state, so a missing/renamed runtime is visible before it bites."""
+    out = []
+    for name in ("node", "npm", "npx"):
+        p = os.path.join(net.home(), "bin", name)
+        if not os.path.lexists(p):
+            out.append({"shim": name, "state": "absent", "target": ""})
+            continue
+        if os.path.islink(p):
+            target = os.readlink(p)
+            state = "ok" if os.access(target, os.X_OK) else "broken"
+        else:
+            target = p
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                head = fh.read()
+            m = re.search(r'^NODE="([^"]+)"', head, re.M)
+            target = m.group(1) if m else ""
+            state = "ok" if target and os.access(target, os.X_OK) else "broken"
+        out.append({"shim": name, "state": state, "target": target})
     return out

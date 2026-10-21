@@ -33,6 +33,30 @@ SHA256/签名。它额外把 `brew install node` 也改写了，这样你剩下�
 它们是官方上游构建，用同一个项目发布的摘要校验，可能还校验了 GPG/Apple 签名。镜像只能改变
 **速度**，改不了字节。信任模型的漏洞见 [LIMITATIONS.zh-CN.md](LIMITATIONS.zh-CN.md) §4。
 
+**如果 `node` / `npm` / `npx` 找不到二进制呢？**
+`ibrew node` 有一条第 1→3 的阶梯，且**绝不会**在你指定大版本时偷偷换一个：
+
+1. 该大版本下、本架构最新的补丁版；
+2. 若这个构建声明的 macOS 比你的新，就退到同大版本更老的补丁；
+3. 全都不行才停下，并明确说明：`Node 99 has no official x86_64 macOS build.
+   Available majors: 26, 25, 24, …`，同时给出提示（`ibrew node use 26`）。
+
+装好之后，`node`/`npm`/`npx` 三个垫片都是**带守卫的**：运行时目录被删或被移走时，它们会以
+退出码 127 失败，并打印
+
+```
+intelbrew: the managed Node runtime is missing: /Users/…/.intelbrew/node/v20.20.2/bin/node
+  fix: ibrew node use 20   (or: ibrew node install)
+```
+
+不会“继续在 PATH 里往后找”然后悄悄用另一个 `node`（那会导致版本和 npm 都不对）。
+`ibrew doctor` 会逐个报告坏掉的垫片，`ibrew node list` 也会提示。
+
+**我已经在用 nvm / fnm / asdf，会不会打架？**
+intelbrew 的 PATH 块生效时，它的垫片优先（`~/.intelbrew/bin` 在最前）。`ibrew setup --apply`
+检测到别的版本管理器会给出警告。想让 nvm/fnm 继续管 `node`，跑
+`ibrew setup --uninstall-profile` 即可——`brew` 和 `ibrew install` 仍然照常工作。
+
 **为什么 `ibrew doctor` 说最新 Node 在这台机器上跑不了？**
 因为那个 Intel 构建声明了更高的 macOS 下限（`otool -l … minos`）。`ibrew node` 会装
 **能跑的最新版**——它读取刚下载构建的部署目标，所以上限是按机器实测的，从不写死。
