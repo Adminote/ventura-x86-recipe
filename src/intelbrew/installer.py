@@ -346,8 +346,6 @@ def install_archive(step: dict, formula: str, pf: PlatformInfo, *, allow_unverif
                  f"{pf.macos_version[0]}; it may refuse to launch")
 
     made = make_links({cmd: os.path.join(dest, rel) for cmd, rel in bins.items()})
-    if os.environ.get("IBREW_NO_PROFILE") != "1":
-        ensure_profile()
     rep.level = verify.ensure_trusted_level(rep.integrity, rep.provenance, rep.notes)
     out.installed = True
     out.prefix = dest
@@ -581,31 +579,96 @@ def installed_state() -> dict[str, dict]:
 PROFILE_MARK = "# >>> intelbrew >>>"
 
 
+PROFILE_START = "# >>> intelbrew >>>"
+PROFILE_END = "# <<< intelbrew <<<"
+
+
+def profile_candidates() -> list[str]:
+    """Shell startup files to consider, most specific first for this $SHELL."""
+    shell = os.path.basename(os.environ.get("SHELL", ""))
+    home = os.path.expanduser("~")
+    if shell == "zsh":
+        # Interactive zsh reads ~/.zshrc; login shells read ~/.zprofile first.
+        return [os.path.join(home, ".zshrc"), os.path.join(home, ".zprofile"),
+                os.path.join(home, ".zshenv")]
+    if shell == "bash":
+        return [os.path.join(home, ".bash_profile"), os.path.join(home, ".bashrc"),
+                os.path.join(home, ".profile")]
+    return [os.path.join(home, ".profile"), os.path.join(home, ".zshrc")]
+
+
 def profile_path() -> str:
-    shell = os.environ.get("SHELL", "")
-    return os.path.expanduser("~/.zprofile" if shell.endswith("zsh") else "~/.profile")
+    """The file to write: the first candidate that already exists, else the first."""
+    for cand in profile_candidates():
+        if os.path.exists(cand):
+            return cand
+    return profile_candidates()[0]
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
 
 
 def ensure_profile(write: bool = True) -> bool:
+    """Add (or refresh) the PATH block in the user's shell startup file."""
     prof = profile_path()
+    text = _read(prof)
+    block = (f"{PROFILE_START}\n"
+             f"# intelbrew binaries first, then the brew shim, then Homebrew.\n"
+             f"# Remove this block to undo (`ibrew setup --uninstall` drops it too).\n"
+             f'export PATH="{bin_dir()}:{_brew_bin_link_dir()}:$PATH"\n'
+             f"{PROFILE_END}\n")
+    if PROFILE_START in text:
+        # replace a stale block (a path from another install would shadow the new one)
+        kept, skipping = [], False
+        for line in text.splitlines(keepends=True):
+            if line.strip() == PROFILE_START:
+                skipping = True
+                continue
+            if skipping and (line.strip() == PROFILE_END or line.strip().startswith(PROFILE_START)):
+                skipping = False
+                continue
+            if not skipping:
+                kept.append(line)
+        text = "".join(kept).rstrip("\n") + "\n\n" + block
+        if not write:
+            return True
+        with open(prof, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return True
     if not write:
-        return os.path.exists(prof) and PROFILE_MARK in open(prof, encoding="utf-8").read()
-    text = ""
-    if os.path.exists(prof):
-        with open(prof, encoding="utf-8") as fh:
-            text = fh.read()
-    if PROFILE_MARK in text:
         return False
-    block = f"""
-{PROFILE_MARK}
-# brew-first PATH order + intelbrew binaries in front of Homebrew links.
-# `eval "$(ibrew env --"$SHELL")"` if you prefer generated settings.
-export PATH="{bin_dir()}:{_brew_bin_link_dir()}:$PATH"
-{PROFILE_MARK} <<<
-"""
     with open(prof, "a", encoding="utf-8") as fh:
-        fh.write(block)
+        fh.write(("\n" if text and not text.endswith("\n") else "") + block)
     return True
+
+
+def drop_profile() -> bool:
+    """Remove the PATH block; returns True when something was removed."""
+    removed = False
+    for prof in profile_candidates():
+        text = _read(prof)
+        if PROFILE_START not in text:
+            continue
+        kept, skipping = [], False
+        for line in text.splitlines(keepends=True):
+            if line.strip() == PROFILE_START:
+                skipping = True
+                removed = True
+                continue
+            if skipping and (line.strip() == PROFILE_END
+                             or line.strip().startswith(PROFILE_START)):
+                skipping = False
+                continue
+            if not skipping:
+                kept.append(line)
+        with open(prof, "w", encoding="utf-8") as fh:
+            fh.write("".join(kept))
+    return removed
 
 
 def _brew_bin_link_dir() -> str:

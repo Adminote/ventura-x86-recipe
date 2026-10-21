@@ -243,3 +243,59 @@ def test_jq_recipe_is_a_raw_binary():
     assert step["bin"] == ["jq"]
     assert len(step["sha256"]) == 64
     assert r.check_requirements(_pf()) == ""
+
+
+# --------------------------------------------------------------------------- #
+# shell profile handling (the "ibrew: command not found" class of bug)
+# --------------------------------------------------------------------------- #
+
+def test_profile_block_is_written_and_removed(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".zshrc").write_text("# user config\nexport FOO=1\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+
+    from intelbrew import installer
+
+    installer.ensure_profile()
+    text = (home / ".zshrc").read_text()
+    assert installer.PROFILE_START in text
+    assert installer.PROFILE_END in text
+    assert "export PATH=" in text
+    assert "export FOO=1" in text            # user content preserved
+
+    installer.ensure_profile()               # idempotent: no duplicate block
+    assert (home / ".zshrc").read_text().count("export PATH=") == 1
+
+    assert installer.drop_profile() is True
+    assert "intelbrew" not in (home / ".zshrc").read_text()
+    assert "export FOO=1" in (home / ".zshrc").read_text()
+
+
+def test_profile_targets_zshrc_even_if_zprofile_exists(tmp_path, monkeypatch):
+    """Homebrew writes .zprofile; interactive zsh only reads it for login shells."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".zshrc").write_text("")
+    (home / ".zprofile").write_text("")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    from intelbrew import installer
+
+    assert installer.profile_path() == str(home / ".zshrc")
+
+
+def test_installing_a_tool_does_not_touch_the_profile(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    monkeypatch.setenv("INTELBREW_HOME", str(tmp_path / "ib"))
+    # install_archive() must never edit shell config; only `setup --apply` may
+    import inspect
+
+    from intelbrew import installer
+
+    body = inspect.getsource(installer.install_archive)
+    assert "ensure_profile(" not in body, "install must not write the shell profile"
