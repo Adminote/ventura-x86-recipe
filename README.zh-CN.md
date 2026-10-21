@@ -127,8 +127,16 @@ $ ibrew plan jq git
   ✓ looking up jq in the Homebrew API (formulae.brew.sh)  3.4s
 ```
 
-不会再出现“几分钟毫无输出、不知道是慢还是死了”的情况。`IBREW_NO_PROGRESS=1` 可关闭转圈
-（管道/CI 本来就只会看到开始和结束两行）。
+不会再出现“几分钟毫无输出、不知道是慢还是死了”的情况。百分比是**实测值**，不是估算：
+
+| 场景 | 显示 |
+|---|---|
+| 任何下载（含多镜像赛跑） | `uv-x86_64-apple-darwin.tar.gz  42.3%  7.3/17.2 MB  0.5 MB/s` |
+| `ibrew install a b c` | `[2/3 · 33.3%] b 1.8.2 via registry` |
+| `ibrew doctor` | `[4/6 · 50.0%] network`，以及 `28.6% probing nodejs.org (3/7)` |
+| recipe 验证 | 每个 recipe 一步：`[4/6 · 50.0%] validate recipe jq` |
+
+`IBREW_NO_PROGRESS=1` 关闭转圈；管道/CI 里每 5 秒打印一行百分比而不是转圈。
 
 ## 6. 边界——它**不做**什么
 

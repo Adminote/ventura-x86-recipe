@@ -137,7 +137,8 @@ def check_toolchain() -> list[Check]:
     return out
 
 
-def check_network() -> list[Check]:
+def check_network(sub_progress=None) -> list[Check]:
+    """Probe every mirror endpoint. ``sub_progress(i, n, name)`` shows per-probe %."""
     out: list[Check] = []
     probes = [
         ("formulae.brew.sh", "https://formulae.brew.sh/api/formula/node.json"),
@@ -148,7 +149,9 @@ def check_network() -> list[Check]:
         ("npm", "https://registry.npmjs.org/npm/latest"),
         ("github-api", "https://api.github.com/rate_limit"),
     ]
-    for name, url in probes:
+    for i, (name, url) in enumerate(probes, start=1):
+        if sub_progress:
+            sub_progress(i, len(probes), name)
         r = net.request(url, timeout=15, retries=0)
         # 401/403 count as "reachable"
         good = r.ok or r.status in (401, 403)

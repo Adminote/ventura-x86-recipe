@@ -556,3 +556,52 @@ def test_activity_swallows_nothing_on_exception(capsys):
     with pytest.raises(RuntimeError), util.activity("boom", slow_after=0):
         raise RuntimeError("x")
     assert "✓" not in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# percentages
+# --------------------------------------------------------------------------- #
+
+def test_percent_math():
+    from intelbrew import util
+
+    assert util.percent(0, 4) == 0
+    assert util.percent(2, 4) == 50
+    assert util.percent(4, 4) == 100
+    assert util.percent(1, 0) == 100        # never divide by zero
+
+
+def test_progress_header_shows_step_and_percent(capsys):
+    from intelbrew import util
+
+    util.set_steps(4)
+    util.step_header(3, 4, "installing uvdar")
+    out = capsys.readouterr().out
+    assert "[3/4" in out and "50.0%" in out and "uvdar" in out
+
+
+def test_progress_done_counts_up_and_finished_reports_100(capsys):
+    from intelbrew import util
+
+    util.set_steps(2)
+    util.progress("one done", done=True)
+    assert "50.0%" in capsys.readouterr().out
+    util.progress("all done", done=True, finished=True)
+    out = capsys.readouterr().out
+    assert "100.0%" in out
+
+
+def test_download_ticker_reports_percentage(tmp_path):
+    from intelbrew import net
+
+    part = tmp_path / "0.part"
+    side = tmp_path / "0.size"
+    part.write_bytes(b"x" * 10)
+    side.write_text("5000000")
+    procs = [("https://example.com/f.tgz", None, str(part), str(side))]
+    tick = net._DownloadTicker(str(tmp_path / "f.tgz"), full=10_000_000, procs=procs)
+    sizes = tick._sizes()
+    assert sizes == [5000000]
+    from intelbrew.util import percent
+
+    assert 49.0 < percent(sizes[0], tick.full) < 51.0

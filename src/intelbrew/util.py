@@ -54,15 +54,47 @@ class Unsupported(Exception):
 # --------------------------------------------------------------------------- #
 
 T0 = time.monotonic()
+STEP_TOTAL = 0        # number of steps the current command knows about
+STEP_DONE = 0         # how many of them have finished
 
 
 def elapsed() -> float:
     return time.monotonic() - T0
 
 
-def progress(msg: str) -> None:
-    """A step header that also tells the user how long we have been at it."""
-    print(f"{_c('36', '==>')} {msg}  {_c('2', f'[{elapsed():.1f}s]')}", flush=True)
+def set_steps(total: int) -> None:
+    """Tell the progress header how many steps this command has."""
+    global STEP_TOTAL, STEP_DONE
+    STEP_TOTAL, STEP_DONE = total, 0
+
+
+def percent(phase: float, total: float) -> float:
+    """``phase/total`` as 0-100, tolerant of a zero total (no upload-size headers)."""
+    if total <= 0:
+        return 100.0 if phase > 0 else 0.0
+    return 100.0 * phase / total
+
+
+def progress(msg: str, *, done: bool = False, finished: bool = False) -> None:
+    """A step header with elapsed time and, when known, overall completion.
+
+    ``done=True`` marks one step finished; ``finished=True`` means every step is
+    complete, so the header can report 100% instead of the 1/N it just started.
+    """
+    global STEP_DONE
+    if done:
+        STEP_DONE += 1
+    parts = [f"[{elapsed():5.1f}s]"]
+    if STEP_TOTAL:
+        n = STEP_TOTAL if finished else min(STEP_DONE or 1, STEP_TOTAL)
+        parts.append(f"{percent(n, STEP_TOTAL):5.1f}%")
+    print(f"{_c('36', '==>')} {msg}  {_c('2', '  '.join(parts))}", flush=True)
+
+
+def step_header(index: int, total: int, msg: str) -> None:
+    """Progress line for step ``index`` (1-based) of ``total``."""
+    print(f"{_c('36', '==>')} [{index}/{total} · {percent(index - 1, total):5.1f}%] {msg}"
+          f"  {_c('2', f'[{elapsed():.1f}s]')}", flush=True)
 
 
 class activity:

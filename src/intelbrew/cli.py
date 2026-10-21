@@ -22,7 +22,21 @@ import shutil
 import sys
 
 from . import __version__, brew, brewshim, doctor, installer, net, nodemgr, planner, registry
-from .util import PlatformInfo, activity, current_platform, err, info, ok, progress, warn
+from .util import (
+    PlatformInfo,
+    _c,
+    activity,
+    current_platform,
+    elapsed,
+    err,
+    info,
+    ok,
+    percent,
+    progress,
+    set_steps,
+    step_header,
+    warn,
+)
 
 # --------------------------------------------------------------------------- #
 # helpers
@@ -58,26 +72,42 @@ def cmd_doctor(args) -> int:
     pf = _pf(args)
     info(f"intelbrew {__version__} — validating on {pf.pretty_name} {pf.machine} ({pf.arch})")
     checks: list[doctor.Check] = []
-    progress("platform")
+    phases = [f for f in (args.formula or [])]
+    total = 6 + len(phases)
+    set_steps(total)
+    step = 0
+
+    def phase(msg: str) -> None:
+        nonlocal step
+        step += 1
+        step_header(step, total, msg)
+
+    phase("platform")
     checks.append(doctor.check_platform(pf))
-    progress("Homebrew (version, prefix, platform tag, node bottle coverage)")
+    phase("Homebrew (version, prefix, platform tag, node bottle coverage)")
     checks += doctor.check_brew(pf)
     checks.append(doctor.check_install_path())
     checks.append(doctor.check_cellar_writable())
-    progress("toolchain (python, git, curl, node, npm, gpg, codesign)")
+    phase("toolchain (python, git, curl, node, npm, gpg, codesign)")
     checks += doctor.check_toolchain()
-    progress("network (7 endpoints, 15 s each at worst)")
-    checks += doctor.check_network()
+    phase("network (7 endpoints; each can take up to 15 s)")
+
+    def net_progress(i: int, n: int, name: str) -> None:
+        print(f"      {percent(i - 1, n):5.1f}%  probing {name}  "
+              f"({i}/{n})  {_c('2', f'[{elapsed():.1f}s]')}", flush=True)
+
+    checks += doctor.check_network(sub_progress=net_progress)
     checks += doctor.check_proxy()
-    progress("node shims")
+    phase("node shims")
     checks += doctor.check_node_shims()
-    progress("Node.js ceiling for this machine")
+    phase("Node.js ceiling for this machine")
     checks += doctor.check_node_ceiling(pf)
-    progress("done")
+    progress(f"environment checks done — {step}/{total} steps", done=True, finished=True)
     bad = _print_checks(checks)
     if args.formula:
-        for f in args.formula:
-            info(f"recipe: {f}")
+        for f in phases:
+            step += 1
+            step_header(step, total, f"validate recipe {f} (download, verify, extract, run)")
             rchecks = doctor.validate_recipe(f, pf, apply=not args.no_apply,
                                              write_verified=args.write_verified)
             bad += _print_checks(rchecks)
@@ -128,7 +158,7 @@ def cmd_status(args) -> int:
 
 def cmd_plan(args) -> int:
     pf = _pf(args)
-    progress(f"resolving {len(args.formula)} formula(s) for {pf.pretty_name}")
+    step_header(1, 1, f"resolving {len(args.formula)} formula(s) for {pf.pretty_name}")
     res = planner.resolve_many(args.formula, pf)
     for r in res:
         print(r.line())
@@ -145,15 +175,16 @@ def cmd_plan(args) -> int:
 
 def cmd_install(args) -> int:
     pf = _pf(args)
-    progress(f"planning {len(args.formula)} formula(s) for {pf.pretty_name}")
+    step_header(1, len(args.formula) + 1, "planning (source, version, verification)")
+    set_steps(len(args.formula))
     res = planner.resolve_many(args.formula, pf)
     failed = 0
-    for r in res:
+    for index, r in enumerate(res, start=1):
         if not r.ok:
             err(f"{r.formula}: {r.blocked}")
             failed += 1
             continue
-        progress(f"{r.formula} {r.version} via {r.how} ({r.confidence})")
+        step_header(index, len(res), f"{r.formula} {r.version} via {r.how} ({r.confidence})")
         for step in r.steps:
             kind = step.get("kind")
             if args.dry_run:
