@@ -73,8 +73,20 @@ $ brew install node            # 实际走 ~/.intelbrew/brew-bin/brew
 curl -fsSL https://raw.githubusercontent.com/Adminote/ventura-x86-recipe/main/install.sh | sh
 # 或在源码目录里：
 ./install.sh --prefix ~/.local
-ibrew doctor          # 装任何东西之前先看这个
-ibrew setup --apply   # Node 运行时、node/npm/npx 垫片、brew 垫片、PATH
+
+# 安装脚本会把 PATH 写进你的 shell 配置；当前这个终端要手动加载一次
+source ~/.zshrc            # zsh；bash 用 ~/.bash_profile
+ibrew doctor               # 装任何东西之前先看这个
+ibrew setup --apply        # Node 运行时、node/npm/npx 垫片、brew 垫片
+```
+
+如果装完提示 `ibrew: command not found`，说明 PATH 已经写进配置文件、但这个终端还没读它——
+`source` 一下或开个新终端：
+
+```bash
+grep -n intelbrew ~/.zshrc ~/.zprofile   # 看块写到哪个文件了
+ibrew setup --apply                      # 重新写入，并打印具体文件
+ibrew setup --uninstall-profile          # 再删掉
 ```
 
 要求：Intel macOS 11+（Apple Silicon 也能用，只是没那么必要）、`python3` 3.9+（系统自带即可）；

@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 import tempfile
 from dataclasses import dataclass
 
@@ -71,6 +72,17 @@ def check_brew(pf: PlatformInfo) -> list[Check]:
                          f"{'available' if ok_native else 'NOT available (brew would compile)'}",
                          fix="" if ok_native else "`ibrew node install` / `ibrew setup --apply`"))
     return out
+
+
+def check_install_path() -> Check:
+    """Is the `ibrew` we are running reachable from a plain shell?"""
+    found = shutil.which("ibrew")
+    this = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+    if found:
+        return Check("install.on-path", "ok", found)
+    return Check("install.on-path", "fail", f"`ibrew` not found on PATH (running {this or '?'})",
+                 fix='run `ibrew setup --apply`, then `source '
+                     + os.path.expanduser("~/.zshrc") + '` (or open a new terminal)')
 
 
 def check_cellar_writable() -> Check:

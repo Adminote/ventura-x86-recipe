@@ -57,6 +57,7 @@ def cmd_doctor(args) -> int:
     info(f"intelbrew {__version__} — validating on {pf.pretty_name} {pf.machine} ({pf.arch})")
     checks: list[doctor.Check] = [doctor.check_platform(pf)]
     checks += doctor.check_brew(pf)
+    checks.append(doctor.check_install_path())
     checks.append(doctor.check_cellar_writable())
     checks += doctor.check_toolchain()
     checks += doctor.check_network()
@@ -162,11 +163,16 @@ def cmd_install(args) -> int:
                 err(f"{r.formula}: {oc.error}")
                 failed += 1
     if not args.dry_run and failed == 0:
-        installer.ensure_profile()
-        ok(f"done. binaries: {installer.bin_dir()}  (profile: {installer.profile_path()})")
-        print(f"    put {installer.bin_dir()} before {brew.brew_prefix()}/bin on PATH "
-              f"(open a new shell after `ibrew setup --apply`)")
+        ok(f"done. binaries: {installer.bin_dir()}")
+        if not _dir_on_path(installer.bin_dir()):
+            print(f"    not on PATH yet: run `ibrew setup --apply` to add it to "
+                  f"{installer.profile_path()}, or use `eval \"$(ibrew env)\"`")
     return 1 if failed else 0
+
+
+def _dir_on_path(directory: str) -> bool:
+    real = os.path.realpath(directory)
+    return any(os.path.realpath(p) == real for p in os.environ.get("PATH", "").split(os.pathsep))
 
 
 def cmd_add(args) -> int:
@@ -266,12 +272,21 @@ def cmd_setup(args) -> int:
         except Exception as e:
             err(f"brew shim: {e}")
     # 3. profile
+    if args.uninstall_profile:
+        ok("removed the intelbrew PATH block" if installer.drop_profile()
+           else "no intelbrew block found in your shell profile")
+        return 0
     if args.apply:
-        changed = installer.ensure_profile()
-        ok(f"profile {'updated' if changed else 'already set'}: {installer.profile_path()}")
-        print('    open a new shell (or run: eval "$(ibrew env)")')
+        installer.ensure_profile()
+        prof = installer.profile_path()
+        ok(f"PATH block written to {prof}")
+        if _dir_on_path(installer.bin_dir()):
+            print(f"    {installer.bin_dir()} is already active in this shell")
+        else:
+            print(f"    activate it now:  source {prof}   (or open a new terminal)")
+            print("    then verify:      ibrew doctor")
     else:
-        print("    dry run: add --apply to update your shell profile")
+        print(f"    dry run: add --apply to write the PATH block into {installer.profile_path()}")
     # 4. census line
     try:
         c = brew.census(pf)
@@ -395,6 +410,8 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--node", default=None)
     st.add_argument("--skip-node", action="store_true")
     st.add_argument("--skip-brew", action="store_true")
+    st.add_argument("--uninstall-profile", action="store_true",
+                    help="remove the intelbrew PATH block from your shell profile")
     st.set_defaults(func=cmd_setup)
 
     v = sub.add_parser("verify", help="integrity report for a local file")

@@ -77,8 +77,20 @@ are passed through to the real `brew` untouched.
 curl -fsSL https://raw.githubusercontent.com/Adminote/ventura-x86-recipe/main/install.sh | sh
 # or from a checkout:
 ./install.sh --prefix ~/.local
-ibrew doctor          # read this before installing anything
-ibrew setup --apply   # Node runtime, node/npm/npx shims, brew shim, PATH
+
+# the installer writes a PATH block into your shell profile; load it in *this* shell
+source ~/.zshrc            # zsh; use ~/.bash_profile on bash
+ibrew doctor               # read this before installing anything
+ibrew setup --apply        # Node runtime, node/npm/npx shims, brew shim
+```
+
+If `ibrew: command not found` after installing, the PATH block is in the profile but
+this shell has not read it yet — `source` it, or open a new terminal:
+
+```bash
+grep -n intelbrew ~/.zshrc ~/.zprofile   # find where the block went
+ibrew setup --apply                      # (re)write it; prints the exact file
+ibrew setup --uninstall-profile          # remove it again
 ```
 
 Requirements: macOS 11+ on Intel (Apple Silicon works too, but needs it less),
