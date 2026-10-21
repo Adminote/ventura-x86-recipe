@@ -9,13 +9,20 @@ on:
     # Weekly: catches upstream URL rot even when nothing is being changed here.
     - cron: "0 3 * * 1"
 
+# Runner labels matter more than they look: a retired image (macos-13) does not
+# fail, it queues forever and every PR shows "Some checks haven't completed yet".
+# Current labels are documented in actions/runner-images:
+#   macos-15-intel / macos-26-intel  → Intel (x86_64)   ← what this project targets
+#   macos-15 / macos-26 / macos-14   → Apple Silicon
+#   ubuntu-latest                    → cheapest smoke test for the pure-python parts
 jobs:
   unit:
     name: unit tests (${{ matrix.os }})
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-14, ubuntu-latest]
+        os: [macos-15-intel, macos-14, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +40,8 @@ jobs:
 
   recipes:
     name: recipe validation (Intel macOS)
-    runs-on: macos-13            # last Intel runner image
+    runs-on: macos-15-intel      # current Intel image (macos-13 was retired)
+    timeout-minutes: 45
     # Upstream URLs rot for reasons unrelated to this repo. On PRs that must not
     # block anyone (the failure is still visible as a red job); on main/schedule
     # it does block, because that is exactly the signal we want.
@@ -77,6 +85,7 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
