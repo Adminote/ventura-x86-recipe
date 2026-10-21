@@ -200,14 +200,22 @@ def verdict(d: dict[str, Any]) -> list[str]:
             lines.append(f"npm: {npm['version']} — {npm['engines_problem']}; `npx` will warn or fail")
         elif not exposes and npm.get("bin"):
             lines.append(f"npm: the package named '{d['query']}' exposes "
-                         f"{', '.join(npm['bin'][:3])} — not '{d['query']}'; probably unrelated")
+                         f"{', '.join(npm['bin'][:3])} — not '{d['query']}'; "
+                         f"use `npx {npm['bin'][0]}` if that is what you meant")
         elif not exposes and not npm.get("bin"):
-            # npm names are first-come-first-served: "htop" on npm is
-            # 'handle-to-promise', not htop. Do not send people to it.
             desc = npm.get("description") or "no description"
-            lines.append(f"npm: the package named '{d['query']}' exposes no command "
-                         f"({desc}) — most likely unrelated; do not rely on "
-                         f"`npx {d['query']}`")
+            if brew_.get("exists"):
+                # npm names are first-come-first-served: "htop" on npm is
+                # 'handle-to-promise', not htop. Do not send people to it.
+                lines.append(f"npm: the package named '{d['query']}' exposes no command "
+                             f"({desc}) — most likely unrelated to the brew formula; "
+                             f"do not rely on `npx {d['query']}`")
+            else:
+                # A library, not a CLI: sharp has no bin, and `npx sharp` is
+                # meaningless — say so instead of calling it squatted.
+                lines.append(f"npm: {npm['version']} is a library "
+                             f"({desc}), not a command — require() it from a project; "
+                             f"`npx {d['query']}` does nothing useful")
         elif npm["kind"] == "js":
             lines.append(f"npm: {npm['version']} is pure JavaScript → `npx {d['query']}` works")
         elif npm["kind"] == "prebuilt":
