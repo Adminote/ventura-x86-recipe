@@ -449,3 +449,64 @@ def test_validate_passes_when_digest_and_install_work(tmp_path, monkeypatch):
         "ok": True, "returncode": 0, "stdout": "ok 1.0", "stderr": ""})())
     checks = doctor.validate_recipe("ok", _pf(), apply=True)
     assert not any(c.status == "fail" for c in checks), [c.name for c in checks]
+
+
+# --------------------------------------------------------------------------- #
+# `ibrew why` classification (pure functions, no network)
+# --------------------------------------------------------------------------- #
+
+def _npm_meta(**kw):
+    base = {"name": "x", "version": "1.0.0"}
+    base.update(kw)
+    return base
+
+
+def test_why_npm_pure_js():
+    from intelbrew import why
+
+    kind, evidence = why._npm_native(_npm_meta(bin={"x": "cli.js"}))
+    assert kind == "js", evidence
+
+
+def test_why_npm_prebuilt_markers():
+    from intelbrew import why
+
+    kind, _ = why._npm_native(_npm_meta(optionalDependencies={"@img/x-darwin-x64": "1"}))
+    assert kind == "prebuilt"
+    kind, _ = why._npm_native(_npm_meta(dependencies={"prebuild-install": "^7"}))
+    assert kind == "prebuilt"
+
+
+def test_why_npm_needs_a_compiler():
+    from intelbrew import why
+
+    kind, evidence = why._npm_native(_npm_meta(scripts={"install": "node-gyp rebuild"}))
+    assert kind == "build" and "node-gyp" in evidence
+
+
+def test_why_npm_platform_and_engines():
+    from intelbrew import why
+
+    meta = _npm_meta(os=["linux"], cpu=["x64"])
+    assert "not darwin" in why._npm_platform(meta, _pf()) or why._npm_platform(meta, _pf())
+    meta = _npm_meta(engines={"node": ">=99"})
+    assert "needs node" in why._engines_problem(meta)
+
+
+def test_why_verdict_warns_about_unrelated_npm_package():
+    data = {"query": "htop", "platform": "macOS 13",
+            "on_path": {"path": "", "managed": False, "version": ""},
+            "brew": {"exists": True, "version": "3.5.3", "native_bottle": False,
+                     "tag": "ventura", "deprecated": False, "disabled": False},
+            "recipe": {"exists": False}, "plan": {"ok": False, "how": "none"},
+            "npm": {"exists": True, "version": "1.0.1", "kind": "js",
+                    "bin": [], "description": "handle-to-promise"}}
+    lines = " ".join(why_verdict(data))
+    assert "unrelated" in lines
+    assert "works" not in lines
+
+
+def why_verdict(data):
+    from intelbrew import why
+
+    return why.verdict(data)

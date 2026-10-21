@@ -56,6 +56,7 @@ Two things make this worse and are handled here:
 | `ibrew install <pkg>…` | Installs from the plan; **never compiles**; digest-verified |
 | `ibrew node install/use <major>` | Official Node.js build (mirror-raced), plus `node`/`npm`/`npx` shims |
 | `ibrew add <cmd> <url> --sha256 …` | Turns a verified archive (or a bare binary with `--raw`) into a recipe, validated immediately |
+| `ibrew why <name>` | Says where a command/package can come from here: native bottle, recipe/upstream binary, or npm (and whether `npx` would need a compiler) |
 | `ibrew setup --apply` | One-shot: Node runtime + shims + `brew` shim + shell profile |
 | `ibrew status` / `ibrew env` / `ibrew verify` | Inspect, shell integration, standalone integrity report |
 

@@ -53,6 +53,7 @@ macOS 13.7.8 x86_64: bottle tag 'ventura'
 | `ibrew install <包>…` | 按计划安装；**永不编译**；校验摘要 |
 | `ibrew node install/use <大版本>` | 官方 Node.js 构建（多镜像赛跑）+ `node`/`npm`/`npx` 垫片 |
 | `ibrew add <命令> <url> --sha256 …` | 把已验证的压缩包（或用 `--raw` 指定裸二进制）变成 recipe，并立即验证 |
+| `ibrew why <名字>` | 说清这个命令/包在这台机器上能从哪来：原生 bottle、recipe/上游二进制，还是 npm（以及 `npx` 是否要编译） |
 | `ibrew setup --apply` | 一条命令装好：Node 运行时 + 垫片 + `brew` 垫片 + shell 配置 |
 | `ibrew status` / `ibrew env` / `ibrew verify` | 查看状态、shell 集成、单独校验文件 |
 

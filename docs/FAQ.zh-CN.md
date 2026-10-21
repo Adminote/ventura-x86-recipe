@@ -52,6 +52,21 @@ intelbrew: the managed Node runtime is missing: /Users/…/.intelbrew/node/v20.2
 不会“继续在 PATH 里往后找”然后悄悄用另一个 `node`（那会导致版本和 npm 都不对）。
 `ibrew doctor` 会逐个报告坏掉的垫片，`ibrew node list` 也会提示。
 
+**`npx foo` 失败了——intelbrew 会介入吗？**
+不会。`npx`/`npm` 只从 npm registry 解析包，从不查 recipe 或 Homebrew。用
+`ibrew why foo` 一次看清所有路线：
+
+```console
+$ ibrew why cowsay
+  • npm: 1.6.0 is pure JavaScript → `npx cowsay` works
+$ ibrew why htop
+  • npm: the package named 'htop' exposes no command (handle-to-promise) — most likely
+    unrelated; do not rely on `npx htop`
+```
+
+它还能区分“npm 包安装时要编译”（需要工具链和系统头文件）与“自带平台二进制”
+（`sharp`、`esbuild`）。
+
 **我已经在用 nvm / fnm / asdf，会不会打架？**
 intelbrew 的 PATH 块生效时，它的垫片优先（`~/.intelbrew/bin` 在最前）。`ibrew setup --apply`
 检测到别的版本管理器会给出警告。想让 nvm/fnm 继续管 `node`，跑
