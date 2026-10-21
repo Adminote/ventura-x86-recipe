@@ -74,12 +74,31 @@ def check_brew(pf: PlatformInfo) -> list[Check]:
     return out
 
 
+def running_from_source() -> bool:
+    """True when doctor is invoked as `python -m intelbrew.cli` from a checkout."""
+    argv0 = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+    if argv0.endswith(("cli.py", "__main__.py")):
+        return True
+    pkg = os.path.dirname(os.path.abspath(__file__))
+    return "/src/intelbrew" in pkg or (argv0.startswith(os.path.dirname(pkg)) and not argv0.endswith("ibrew"))
+
+
 def check_install_path() -> Check:
-    """Is the `ibrew` we are running reachable from a plain shell?"""
+    """Is the `ibrew` we are running reachable from a plain shell?
+
+    Only meaningful for an installed launcher: a checkout, CI or a one-off
+    `python -m` run is legitimately not on PATH, and must not turn a recipe
+    validation into a failure.
+    """
     found = shutil.which("ibrew")
     this = os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+    if found and running_from_source() and os.path.realpath(found) != os.path.realpath(this):
+        return Check("install.on-path", "ok", f"{found} (doctor running from a checkout)")
     if found:
         return Check("install.on-path", "ok", found)
+    if running_from_source():
+        return Check("install.on-path", "skipped",
+                     "running from a source checkout (not installed)")
     return Check("install.on-path", "fail", f"`ibrew` not found on PATH (running {this or '?'})",
                  fix='run `ibrew setup --apply`, then `source '
                      + os.path.expanduser("~/.zshrc") + '` (or open a new terminal)')
@@ -202,7 +221,8 @@ def check_node_ceiling(pf: PlatformInfo) -> list[Check]:
 # recipe validation
 # --------------------------------------------------------------------------- #
 
-def validate_recipe(name: str, pf: PlatformInfo, *, apply: bool = True) -> list[Check]:
+def validate_recipe(name: str, pf: PlatformInfo, *, apply: bool = True,
+                    write_verified: bool = False) -> list[Check]:
     out: list[Check] = []
     r = registry.load(name)
     if not r:
@@ -249,7 +269,7 @@ def validate_recipe(name: str, pf: PlatformInfo, *, apply: bool = True) -> list[
             bad = [c for c in checks if "FAILED" in c]
             out.append(Check(tag, "fail" if bad else "ok",
                              "; ".join(checks) + f"  [{oc.report}]"))
-            if not bad:
+            if not bad and write_verified:
                 r = registry.mark_verified(r, pf)
                 registry.save(r)
         finally:

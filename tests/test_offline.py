@@ -6,6 +6,7 @@ Run: PYTHONPATH=src python3 -m pytest tests/ -q
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 import tarfile
@@ -378,3 +379,73 @@ def test_shims_refuse_to_run_a_missing_runtime(tmp_path, monkeypatch):
                        capture_output=True, text=True)
     assert p.returncode == 127
     assert "managed Node runtime is missing" in p.stderr
+
+
+# --------------------------------------------------------------------------- #
+# doctor exit codes (CI must not fail because a checkout is not "installed")
+# --------------------------------------------------------------------------- #
+
+def test_install_path_is_skipped_when_running_from_source(monkeypatch):
+    from intelbrew import doctor
+
+    monkeypatch.setattr(doctor.sys, "argv", ["/repo/src/intelbrew/cli.py"])
+    monkeypatch.setattr(doctor, "running_from_source", lambda: True)
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    check = doctor.check_install_path()
+    assert check.status == "skipped"
+    assert "source checkout" in check.detail
+
+
+def test_install_path_fails_for_an_installed_launcher(monkeypatch):
+    from intelbrew import doctor
+
+    monkeypatch.setattr(doctor, "running_from_source", lambda: False)
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    check = doctor.check_install_path()
+    assert check.status == "fail"
+
+
+def test_broken_recipe_fails_validation(tmp_path, monkeypatch):
+    """A wrong digest must be a failure, not a warning."""
+    reg = tmp_path / "registry"
+    reg.mkdir()
+    (reg / "broken.json").write_text(json.dumps({
+        "name": "broken", "version": "1.0",
+        "steps": [{"kind": "archive", "source": "manual",
+                   "url": "https://example.invalid/x.tar.gz",
+                   "sha256": "0" * 64, "strip": 1}],
+    }))
+    monkeypatch.setenv("IBREW_REGISTRY_DIR", str(reg))
+    monkeypatch.setenv("INTELBREW_HOME", str(tmp_path / "ib"))
+    from intelbrew import doctor
+
+    checks = doctor.validate_recipe("broken", _pf(), apply=True)
+    assert any(c.status == "fail" for c in checks), [c.name for c in checks]
+
+
+def test_validate_passes_when_digest_and_install_work(tmp_path, monkeypatch):
+    """The happy path must stay a pass without touching the network."""
+    reg = tmp_path / "registry"
+    reg.mkdir()
+    (reg / "ok.json").write_text(json.dumps({
+        "name": "ok", "version": "1.0",
+        "steps": [{"kind": "archive", "source": "manual",
+                   "url": "https://example.invalid/x.tar.gz",
+                   "sha256": "a" * 64, "strip": 1}],
+    }))
+    monkeypatch.setenv("IBREW_REGISTRY_DIR", str(reg))
+    monkeypatch.setenv("INTELBREW_HOME", str(tmp_path / "ib"))
+    from intelbrew import doctor, installer
+
+    class Fake:
+        installed = True
+        prefix = "/tmp/ok"
+        bins = ("ok",)
+        report = "digest-only: sha256 [bin]"
+        error = ""
+
+    monkeypatch.setattr(installer, "install_archive", lambda *a, **k: Fake())
+    monkeypatch.setattr(doctor, "run", lambda *a, **k: type("R", (), {
+        "ok": True, "returncode": 0, "stdout": "ok 1.0", "stderr": ""})())
+    checks = doctor.validate_recipe("ok", _pf(), apply=True)
+    assert not any(c.status == "fail" for c in checks), [c.name for c in checks]

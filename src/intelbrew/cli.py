@@ -69,7 +69,8 @@ def cmd_doctor(args) -> int:
     if args.formula:
         for f in args.formula:
             info(f"recipe: {f}")
-            rchecks = doctor.validate_recipe(f, pf, apply=not args.no_apply)
+            rchecks = doctor.validate_recipe(f, pf, apply=not args.no_apply,
+                                             write_verified=args.write_verified)
             bad += _print_checks(rchecks)
     else:
         recipes = registry.all_recipes()
@@ -387,6 +388,8 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("formula", nargs="*")
     d.add_argument("--no-apply", action="store_true",
                    help="only check declared data (no download, no execution)")
+    d.add_argument("--write-verified", action="store_true",
+                   help="record a fresh 'verified' block into the recipe (maintainers)")
     d.set_defaults(func=cmd_doctor)
 
     s = sub.add_parser("status", help="what happens here for brew/node/npm")
