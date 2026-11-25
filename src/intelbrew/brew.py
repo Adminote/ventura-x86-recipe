@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -27,7 +29,7 @@ TAG_TO_MACOS = {v: k for k, v in TAG_MACOS.items()}
 TAG_TO_MACOS["osx"] = 10
 
 # Last non-EOL Intel macOS for which homebrew-core publishes x86_64 bottles.
-# Update this constant if Homebrew changes policy (see docs/methodology.md §1).
+# Update this constant if Homebrew changes policy (see docs/HOW-IT-WORKS.md).
 INTEL_SUPPORTED_MAX_MACOS = 15
 
 
@@ -40,6 +42,56 @@ def tag_for(pf: PlatformInfo) -> str | None:
     if not name:
         return None
     return f"arm64_{name}" if pf.arch == "arm64" else name
+
+
+def macos_of_tag(tag: str | None) -> int | None:
+    """macOS major encoded in a bottle tag, arm64 prefix included (``arm64_sonoma`` → 14)."""
+    if not tag:
+        return None
+    base = tag[6:] if tag.startswith("arm64_") else tag
+    return TAG_TO_MACOS.get(base)
+
+
+def arch_of_tag(tag: str) -> str:
+    return "arm64" if tag.startswith("arm64_") else "x86_64"
+
+
+def platform_tags(tags, pf: PlatformInfo) -> list[str]:
+    """Bottle tags for this machine's CPU that macOS *could* run (any age)."""
+    out = []
+    for t in tags:
+        if "linux" in t:
+            continue
+        if (arch_of_tag(t) == "arm64") != (pf.arch == "arm64"):
+            continue
+        if macos_of_tag(t) is None:
+            continue
+        out.append(t)
+    return out
+
+
+def best_bottle_tag(tags, pf: PlatformInfo) -> tuple[str | None, bool]:
+    """Newest usable bottle tag for this machine, and whether it is the native one."""
+    mine = pf.macos_version[0] if pf.macos_version else 0
+    usable = [t for t in platform_tags(tags, pf) if macos_of_tag(t) <= mine]
+    if not usable:
+        return None, False
+    best = max(usable, key=lambda t: macos_of_tag(t))
+    return best, best == tag_for(pf)
+
+
+def version_key(version: str) -> tuple[int, ...]:
+    """Coarse ordering for Homebrew versions (``1.2.3_1`` → ``(1, 2, 3, 1)``)."""
+    nums = tuple(int(x) for x in re.findall(r"\d+", version or ""))
+    return nums or (0,)
+
+
+def parse_oci_tag(tag: str) -> tuple[str, int | None]:
+    """``1.25.0-2`` → ("1.25.0", 2); ``7.1.2-30-1`` → ("7.1.2-30", 1)."""
+    m = re.match(r"^(.*?)(?:-(\d+))?$", tag or "")
+    if not m:
+        return tag or "", None
+    return m.group(1) or "", int(m.group(2)) if m.group(2) else None
 
 
 def formula_tag_set(tags) -> dict[str, bool]:
@@ -141,15 +193,8 @@ class BottleInfo:
 
     def nearest_tag(self, pf: PlatformInfo) -> str | None:
         """Best *other* bottle tag for this machine (for 'bottle found, 1 version behind')."""
-        cands = [t for t in self.tags if t.startswith("arm64_") == (pf.arch == "arm64")]
-        cands = [t for t in cands if t in TAG_TO_MACOS or t.endswith("_linux")]
-        mac = [t for t in cands if t in TAG_TO_MACOS]
-        if not mac:
-            return None
-        mac.sort(key=lambda t: TAG_TO_MACOS[t], reverse=True)
-        mine = pf.macos_version[0] if pf.macos_version else 0
-        older = [t for t in mac if TAG_TO_MACOS[t] <= mine]
-        return older[0] if older else None
+        tag, native = best_bottle_tag(self.tags, pf)
+        return None if native else tag
 
 
 def bottle_info(name: str) -> BottleInfo | None:
@@ -212,6 +257,8 @@ class Census:
     tag: str | None
     total: int
     binary: list[str] = field(default_factory=list)
+    older: list[str] = field(default_factory=list)
+    maybe: list[str] = field(default_factory=list)
     compile: list[str] = field(default_factory=list)
     disabled: list[str] = field(default_factory=list)
 
@@ -219,8 +266,13 @@ class Census:
     def binary_pct(self) -> float:
         return 100.0 * len(self.binary) / max(self.total, 1)
 
+    @property
+    def usable_pct(self) -> float:
+        return 100.0 * (len(self.binary) + len(self.older)) / max(self.total, 1)
+
 
 def census(pf: PlatformInfo, fetch: bool = True) -> Census:
+    """Four tiers: native / older (per the API) / maybe (only ghcr can tell) / compile."""
     tag = tag_for(pf)
     idx = formula_index(fetch=fetch)
     c = Census(pf=pf.to_dict(), tag=tag, total=len(idx))
@@ -230,6 +282,13 @@ def census(pf: PlatformInfo, fetch: bool = True) -> Census:
             c.disabled.append(f["name"])
         elif tag in tags:
             c.binary.append(f["name"])
+        elif best_bottle_tag(tags, pf)[0]:
+            c.older.append(f["name"])
+        elif any(macos_of_tag(t) is not None for t in tags):
+            # The API lists only the tags Homebrew still supports; a bottle built for
+            # an older macOS can outlive that list on ghcr (e.g. wget 1.25.0 keeps an
+            # amd64 sonoma layer after its `sonoma` tag disappeared from the API).
+            c.maybe.append(f["name"])
         else:
             c.compile.append(f["name"])
     return c
@@ -245,17 +304,133 @@ def ghcr_repo(formula: str) -> str:
     return f"{m.group(1)}/{m.group(2)}" if m else formula
 
 
-def ghcr_token(repo: str) -> str | None:
-    import json as _json
+_GHCR_TOKENS: dict[str, tuple[str, float]] = {}
 
+
+def ghcr_token(repo: str) -> str | None:
+    hit = _GHCR_TOKENS.get(repo)
+    if hit and time.time() - hit[1] < 240:
+        return hit[0]
     r = net.request(f"https://ghcr.io/token?scope=repository:homebrew/core/{repo}:pull",
                     timeout=30)
     if not r.ok:
         return None
     try:
-        return _json.loads(r.text()).get("token")
+        tok = json.loads(r.text()).get("token")
     except Exception:
         return None
+    if tok:
+        _GHCR_TOKENS[repo] = (tok, time.time())
+    return tok
+
+
+def ghcr_tags(repo: str, ttl: int = 86400) -> list[str]:
+    """All OCI tags published for ``homebrew/core/<repo>``, newest first (cached)."""
+    if not re.fullmatch(r"[A-Za-z0-9_.@/-]+", repo) or ".." in repo:
+        return []
+    cache = os.path.join(net.cache_dir("ghcr"),
+                         re.sub(r"[^A-Za-z0-9_.-]", "_", repo) + ".tags.json")
+    if net._ttl_fresh(cache, ttl):
+        try:
+            with open(cache, encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, list):
+                return loaded
+        except Exception:
+            pass
+    tok = ghcr_token(repo)
+    if not tok:
+        return []
+    base = f"https://ghcr.io/v2/homebrew/core/{repo}/tags/list"
+    tags: list[str] = []
+    last = ""
+    # net.request has no header access, so paginate with ?last= instead of the Link header.
+    for _ in range(30):
+        url = base + "?n=1000" + (f"&last={urllib.parse.quote(last)}" if last else "")
+        r = net.request(url, headers={"Authorization": f"Bearer {tok}"}, timeout=60)
+        if not r.ok:
+            break
+        try:
+            page = r.json().get("tags") or []
+        except Exception:
+            break
+        if not page:
+            break
+        tags.extend(page)
+        if len(page) < 1000:
+            break
+        last = page[-1]
+    out, seen = [], set()
+    for t in tags:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    if out:
+        try:
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            with open(cache, "w", encoding="utf-8") as fh:
+                json.dump(out, fh)
+        except Exception:
+            pass
+    return out
+
+
+def walk_back() -> int:
+    raw = os.environ.get("IBREW_BOTTLE_WALK_BACK", "")
+    try:
+        n = int(raw) if raw else 8
+    except ValueError:
+        n = 8
+    return max(0, min(30, n))
+
+
+def bottle_candidates(name: str, pf: PlatformInfo) -> list[dict]:
+    """Bottle builds usable on this machine, best first.
+
+    Each entry: ``oci_tag`` (the ghcr tag to pull), ``version``, ``tag`` (the
+    bottle platform tag it was built for) and ``rebuild``.  The first entry is
+    the current version when it has any usable bottle; otherwise the current
+    version is still tried first (ghcr may hold a rebuild the API index has not
+    caught up with), followed by older versions that do have bottles.
+    """
+    info_ = bottle_info(name)
+    if not info_ or info_.disabled:
+        return []
+    cur = info_.version
+    best, native = best_bottle_tag(info_.tags, pf)
+    if native:
+        oci = f"{cur}"
+        return [{"oci_tag": oci, "version": cur, "tag": best, "rebuild": None}]
+
+    hint = best or ""
+    n = walk_back()
+    tags = ghcr_tags(ghcr_repo(name)) if n > 0 else []
+    by_ver: dict[str, tuple[int, str, int | None]] = {}
+    for t in tags:
+        ver, rebuild = parse_oci_tag(t)
+        if not ver:
+            continue
+        rank = rebuild if rebuild is not None else -1
+        prev = by_ver.get(ver)
+        if prev is None or rank > prev[0]:
+            by_ver[ver] = (rank, t, rebuild)
+
+    # A bottle rebuild (``1.25.0-2``) is the same version with a fixed build script,
+    # so the current version's best rebuild must be tried before walking back.
+    cur_oci, cur_rebuild = cur, None
+    if cur in by_ver:
+        _, cur_oci, cur_rebuild = by_ver[cur]
+    out = [{"oci_tag": cur_oci, "version": cur, "tag": hint, "rebuild": cur_rebuild}]
+    if not by_ver:
+        return out
+
+    cur_key = version_key(cur)
+    older = sorted((v for v in by_ver if version_key(v) < cur_key),
+                   key=version_key, reverse=True)[:n]
+    for v in older:
+        _, oci, rebuild = by_ver[v]
+        out.append({"oci_tag": oci, "version": v, "tag": hint, "rebuild": rebuild})
+    return out
 
 
 def tap_for(formula: str) -> str | None:

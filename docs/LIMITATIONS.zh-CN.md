@@ -15,14 +15,14 @@
 | 没有摘要的未签名下载 | 默认拒绝（除非 `IBREW_ALLOW_UNVERIFIED=1`） | 无法验证的字节不算安装 |
 | 任意 brew 名字 → npm | 拒绝 | npm 上有抢注占位包（`uvicorn@0.0.1-security`） |
 | 只支持 Linux 的项目 | 拒绝，并指向 playbook | 不存在 macOS 二进制 |
-| 替换 Homebrew 的依赖图 | 不尝试 | 依赖跟着包一起来：bottle 自带依赖，上游构建是自包含的 |
+| 替换 Homebrew 的依赖图 | 不尝试 | bottle 内嵌的配方会声明依赖，由 Homebrew 自己解析；解析出的每个依赖同样要有可用 bottle，否则那部分依赖仍然会编译 |
 | 私有/闭源二进制 | 不自动解析 | 可以用 `ibrew add` 自己加 recipe |
 
 ## 2. 支持但有前提
 
 | 情况 | 前提/代价 |
 |---|---|
-| 为**更老** macOS 构建的 bottle | 可能用到本机没有的符号；`ibrew install` 会读 Mach-O `minos` 并告警，但无法证明运行时正确。状态是 `probable`，不是 `verified` |
+| 为**更老** macOS 构建的 bottle | 可能用到本机没有的符号；`ibrew install` 绝不接受更新 macOS 的 bottle，浇注前会校验载荷的 CPU 架构，但无法证明运行时正确。状态是 `probable`，不是 `verified` |
 | 为**更新** macOS 构建的 bottle | 直接拒绝——这是唯一“猜一定错”的情况 |
 | `python@3.x` | 走上游**独立** Python 构建。`pyenv`/`uv` 可以互操作；但 brew 的 `python3` 软链和 site-packages **不会**被重建 |
 | `ffmpeg`、`imagemagick`、`redis`… | conda-forge 构建使用自带库集合，**不**链接 Homebrew 的 `libvpx`/`openssl`/`jpeg`。这是特性（不编译、不炸依赖），也是限制（不等价于 brew 配方） |
@@ -57,7 +57,10 @@
 
 ## 5. 已知粗糙处（公开跟踪，不隐藏）
 
-* 某些国内线路下 `ghcr.io` 很慢；所以 Homebrew bottle 路线是最慢的一条，排在选择顺序最后。
+* 某些国内线路下 `ghcr.io` 很慢。这条路线仍然排在编译之前——慢但正确的 bottle 好过编译一小时——而且
+  标签列表（24 小时）和 manifest（30 天）都有缓存，只有第一次查要付往返成本。
+* 往回找到老版本装上的包会被 `brew pin` 住，之后的 `brew upgrade` 不会悄悄把它换成源码编译。
+  `brew unpin` 可撤销。
 * conda-forge 路线只用 `current_repodata.json`（体积小）。只出现在完整 repodata 里的包
   不会被解析到。
 * pypi zipapp 路线依赖项目发布 `.app`/wheel；否则回退到 GitHub releases。

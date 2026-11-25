@@ -346,8 +346,11 @@ def cmd_setup(args) -> int:
     try:
         c = brew.census(pf, fetch=False)
         if c.total:
+            usable = len(c.binary) + len(c.older)
             print(f"    Homebrew here: {len(c.binary)}/{c.total} formulas have a native bottle "
-                  f"({c.binary_pct:.1f}%); the rest would compile — routes: `ibrew plan <name>`")
+                  f"({c.binary_pct:.1f}%), {usable} ({c.usable_pct:.1f}%) have some usable "
+                  f"bottle, {len(c.maybe)} more may still pour from ghcr; the rest would "
+                  f"compile — routes: `ibrew plan <name>`")
         else:
             print("    (formula index not cached; `ibrew census` downloads ~32 MB once)")
     except Exception:
@@ -419,10 +422,15 @@ def cmd_census(args) -> int:
         c = brew.census(pf)
     if args.json:
         print(json.dumps({"tag": c.tag, "total": c.total, "binary": len(c.binary),
-                          "compile": len(c.compile)}, indent=2))
+                          "older": len(c.older), "maybe": len(c.maybe),
+                          "compile": len(c.compile),
+                          "usable": len(c.binary) + len(c.older)}, indent=2))
         return 0
     print(f"{pf.pretty_name} {pf.arch}: bottle tag '{c.tag}'")
     print(f"  native bottles  {len(c.binary):5d} / {c.total}  ({c.binary_pct:.1f}%)")
+    print(f"  older bottle    {len(c.older):5d}  (built for an older macOS or an older release)")
+    print(f"  usable total    {len(c.binary) + len(c.older):5d}  ({c.usable_pct:.1f}%)")
+    print(f"  maybe in ghcr   {len(c.maybe):5d}  (no Intel tag left in the API; checked when you install)")
     print(f"  would compile   {len(c.compile):5d}")
     if args.list_compile:
         print("\n".join(c.compile))
