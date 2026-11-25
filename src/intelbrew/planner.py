@@ -59,7 +59,9 @@ def native_bottle_exists(name: str, pf: PlatformInfo) -> bool:
 def candidate_to_step(cand: sources.Candidate, formula: str) -> dict:
     if cand.source == "brew-bottle":
         return {"kind": "bottle", "name": formula, "tag": cand.meta.get("tag", ""),
-                "version": cand.version, "source": "brew-bottle"}
+                "version": cand.version, "source": "brew-bottle",
+                "native": bool(cand.meta.get("native")),
+                "candidates": list(cand.meta.get("candidates") or [])}
     if cand.source == "npm-global":
         return {"kind": "npm-global", "package": cand.meta.get("package", formula),
                 "version": cand.version, "source": "npm-global"}

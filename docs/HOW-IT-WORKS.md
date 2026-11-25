@@ -43,48 +43,74 @@ expect. `ibrew doctor` compares the two and warns.
 
 ```
 tag = tag_for(this machine)
-if tag in bottle_tags(formula):            → native        (leave `brew install` alone)
-elif any tag with macos_major <= mine:     → older-bottle  (reroute, warn, verify at launch)
-else:                                      → compile-only  (find an upstream source, or refuse)
+if tag in bottle_tags(formula):                     → native       (leave `brew install` alone)
+elif any tag with macos_major <= mine:              → older-bottle (pour it, warn)
+elif ghcr.io has an older release with such a tag:  → older-bottle (walk back, pin, warn)
+else:                                               → compile-only (find an upstream source, or refuse)
 ```
 
 Never route to a bottle whose macOS is *newer* than the machine — it links against
 symbols that do not exist. That is the difference between "probable" and "wishful".
+The CPU always comes from `uname -m`, never from the tag string: `ventura` is an Intel
+tag, `arm64_ventura` is not.
+
+`ibrew census` reports the buckets separately, so a machine Apple abandoned still shows
+what it can install: on macOS 26 Intel only ~0.3% of formulas have a *native* bottle, but
+far more have one built for an older macOS or an older release. It also reports a
+**maybe** bucket — formulas where the API lists no Intel tag at all but a bottle may still
+sit on ghcr from before that tag was pruned (`wget` 1.25.0 keeps an amd64 `sonoma` layer
+although `sonoma` no longer appears in its API tag list). Only the ghcr lookup at install
+time can settle a maybe, so census counts it apart from `usable`.
 
 ## 3. Older bottles: what actually breaks
 
-A bottle is a relocatable prefix plus Homebrew's bookkeeping:
+A bottle is a relocatable prefix that Homebrew relocates while pouring:
 
 ```
-node/23.11.0/
-  .brew/node.rb                 ← formula used at build time
-  INSTALL_RECEIPT.json          ← prefix, tab, dependencies
-  bin/node include/ lib/ share/
+wget/1.25.0/
+  .brew/wget.rb                 ← formula the bottle was built from
+  bin/wget share/man/…
 ```
 
-Homebrew relocates a bottle using the OCI **config blob** (`sh.brew.bottle.digest`,
-`org.opencontainers.image.version`, prefix info) that lives next to the layer on
-`ghcr.io`, then verifies each file against the bottle's checksum list. Two consequences:
+`INSTALL_RECEIPT.json` is written at pour time, not stored in the bottle, and the OCI
+config blob carries no useful labels. What names a build lives in the manifest: the index
+entry's `platform` (`darwin` + `amd64`/`arm64` + `macOS 14`) and annotations
+(`org.opencontainers.image.ref.name` = `1.25.0.sonoma`), plus `sh.brew.bottle.digest` on
+the platform manifest. Two consequences:
 
-* `tar xzf bottle.tar.gz` alone gives a *broken* install (no receipts ⇒ `brew list` blind,
-  no relocation ⇒ wrong paths inside `.pc`/`.dylib`).
-* Installing a bottle built for another macOS is **not** just a tag change: Homebrew refuses
-  it unless the bottle's platform matches its own `SimulateSystem` tag.
+* `tar xzf bottle.tar.gz` alone gives a *broken* install (no relocation ⇒ wrong paths
+  inside `.pc`/`.dylib`, no receipt ⇒ `brew list` blind).
+* Homebrew recognises a local bottle by its file name alone —
+  `HOMEBREW_BOTTLES_EXTNAME_REGEX = /\.([a-z0-9_]+)\.bottle\.(?:(\d+)\.)?tar\.gz$/`, i.e.
+  `<name>--<version>.<tag>.bottle[.N].tar.gz`. Anything else is parsed as a formula name
+  (`Error: Invalid tap name: '/tmp'`). The build metadata comes from
+  `<name minus .tar.gz>.json` beside it (the shape `brew bottle` writes, with
+  `sh.brew.tab` under `[full_name].bottle.tags[tag].tab`); without it the receipt has no
+  `built_on`/`runtime_dependencies`.
 
-The correct approach (what `installer.install_bottle` does): pull the OCI index → find the
-darwin variant for the wanted macOS → download the layer **and** config blob → verify the
-layer's sha256 → write them back as a local bottle (`.incomplete` + `.manifest.json`) →
-`brew install <that file>`. Homebrew then does relocation, linking, receipts and caveats
-itself. If your route to `ghcr.io` is slow (it often is from CN), this path is slow but
-correct; `ibrew install` prefers upstream builds precisely to avoid it.
+The correct approach (what `installer.install_bottle` does): pull the OCI index → keep the
+entries for **this machine's CPU** whose macOS is not newer than this one → download that
+layer → verify the layer's sha256 → check the Mach-O architecture of the `bin`/`sbin`
+payloads *before* handing over → name the file and write the tab sidecar the way Homebrew
+expects → `brew install <that file>`. Homebrew then does relocation, linking, receipts and
+caveats itself.
 
-**Launch check.** Before accepting an older bottle, read the Mach-O deployment target:
+When the current release has no usable bottle, `brew.bottle_candidates` walks back through
+older releases (default 8, `IBREW_BOTTLE_WALK_BACK`) and tries them in order; anything
+installed that way is `brew pin`ned so a later `brew upgrade` cannot quietly force a source
+build. The ghcr tag list (24 h) and manifests (30 d) are cached, so only the first run
+pays for the lookup. If your route to `ghcr.io` is slow (it often is from CN) the download
+is slow but correct; a curated recipe, when one exists, avoids it entirely.
+
+**Launch check.** Archive steps read the Mach-O deployment target before installing:
 
 ```bash
 otool -l bin/node | grep -A2 LC_BUILD_VERSION   # minos 13.5 → needs macOS 13.5+
 ```
 
-`installer._min_macos` does this and warns when `minos > machine macOS`.
+`installer._min_macos` does this and warns when `minos > machine macOS`. Bottles need no
+such check — their platform tag already bounds the macOS they were built on — but every
+bottle is checked for CPU architecture before Homebrew sees it.
 
 ## 4. Official upstream builds are the real answer
 

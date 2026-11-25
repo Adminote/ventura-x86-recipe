@@ -103,34 +103,36 @@ def sha256_file_like(d: dict) -> str:
 # --------------------------------------------------------------------------- #
 
 def brew_bottle(name: str, pf: PlatformInfo) -> Candidate | None:
+    """Bottle route. Without a native tag it reads ghcr's tag list (cached 24 h) for
+    older builds; which of them actually exists on a runnable image is settled at pour
+    time, one candidate at a time."""
     info_ = brew.bottle_info(name)
     if not info_ or info_.disabled:
         return None
     want = brew.tag_for(pf)
-    tags = [t for t in info_.tags if t.startswith("arm64_") == (pf.arch == "arm64")]
-    mine = _macos_major(pf)
-
-    def rank(t: str) -> tuple[int, int]:
-        return (1 if brew.TAG_TO_MACOS.get(t, 0) <= mine else 0, brew.TAG_TO_MACOS.get(t, 0))
-
-    tags = [t for t in tags if t in brew.TAG_TO_MACOS]
-    if not tags:
+    cands = brew.bottle_candidates(name, pf)
+    if not cands:
         return None
-    best = max(tags, key=rank)
-    if best != want and rank(best)[0] == 0:
-        return None  # every bottle needs a newer macOS than this machine
-    status = ("native" if best == want
-              else f"bottle for older macOS {best} (newest tag is {want}) — may not launch on "
-                   f"{pf.pretty_name}")
-    if best != want:
+    first = cands[0]
+    best = first["tag"]
+    if best and best == want:
+        status = "native"
+    elif best:
+        status = (f"bottle for older macOS {best} (newest tag is {want}) — may not launch on "
+                  f"{pf.pretty_name}")
         warn(f"{name}: no {want} bottle; using {info_.version} bottle built on {best}. "
              f"Brew would compile from source instead.")
+    else:
+        status = (f"no {want or 'matching'} bottle tag in the API for {info_.version}; ghcr.io "
+                  f"may still hold a build for an older macOS — older releases are tried in "
+                  f"order. Brew would compile from source instead.")
     return Candidate(
         source="brew-bottle",
-        url=f"brew://{name}/{info_.version}/{best}",
+        url=f"brew://{name}/{first['version']}",
         digest="", algo="sha256", provenance="none",
-        version=info_.version, fmt="tar.gz", notes=status,
-        meta={"tag": best},
+        version=first["version"], fmt="tar.gz", notes=status,
+        meta={"tag": best or "", "native": bool(best and best == want),
+              "candidates": cands},
     )
 
 

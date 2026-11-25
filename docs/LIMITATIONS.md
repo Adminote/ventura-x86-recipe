@@ -15,14 +15,14 @@ wish. If a case is missing here, treat it as unsupported until `ibrew doctor` pr
 | Unsigned downloads without a digest | refused unless `IBREW_ALLOW_UNVERIFIED=1` | unverifiable bytes are not an install |
 | Arbitrary brew name → npm | refused | npm hosts squatted placeholders (`uvicorn@0.0.1-security`) |
 | Linux-only projects | refused with a pointer to the playbook | no macOS binary exists |
-| Replacing Homebrew's dependency graph | not attempted | dependencies come from the same source as the package: a bottle brings its own, upstream builds are self-contained |
+| Replacing Homebrew's dependency graph | not attempted | a bottle's embedded formula declares its dependencies and Homebrew resolves them; each of those dependencies must itself have a usable bottle, or that part of the graph still compiles |
 | Private/proprietary binaries | not resolved automatically | you can add a recipe with `ibrew add` |
 
 ## 2. Supported with caveats
 
 | Case | Caveat |
 |---|---|
-| Bottle built for an **older** macOS | may use symbols missing on your system; `ibrew install` reads the Mach-O `minos` and warns, but cannot prove runtime correctness. Status is `probable`, not `verified` |
+| Bottle built for an **older** macOS | may use symbols missing on your system; `ibrew install` never accepts a newer-macOS bottle and checks the payload's CPU architecture before pouring, but cannot prove runtime correctness. Status is `probable`, not `verified` |
 | Bottle built for a **newer** macOS | rejected outright — this is the one case where guessing is always wrong |
 | `python@3.x` | routed to upstream *standalone* Python builds. `pyenv`/`uv` interoperate; `brew`'s `python3` symlinks and site-packages are **not** recreated |
 | `ffmpeg`, `imagemagick`, `redis`, … | conda-forge builds run with their own library set. They do **not** link against Homebrew's `libvpx`/`openssl`/`jpeg`; this is a feature (no compile, no dependency explosion) and a limitation (no `brew` formula parity) |
@@ -61,8 +61,11 @@ wish. If a case is missing here, treat it as unsupported until `ibrew doctor` pr
 
 ## 5. Known rough edges (tracked, not hidden)
 
-* `ghcr.io` downloads are slow on some CN routes; the Homebrew-bottle route is therefore
-  the slowest path and is chosen last.
+* `ghcr.io` downloads are slow on some CN routes. The route is still tried before any
+  compile — a slow correct bottle beats an hour of building — and the tag list (24 h) and
+  manifests (30 d) are cached, so only the first lookup pays for the round trip.
+* An install that had to walk back to an older release is `brew pin`ned, so a later
+  `brew upgrade` cannot silently replace it with a source build. `brew unpin` undoes it.
 * `conda-forge` route uses `current_repodata.json` (small). Package sets that only appear
   in full repodata are not resolved.
 * `pypi` zipapp route depends on the project shipping a `.app`/wheel; otherwise it falls

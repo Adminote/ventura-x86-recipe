@@ -42,47 +42,66 @@ curl -s https://formulae.brew.sh/api/formula/node.json |
 
 ```
 tag = tag_for(本机)
-if tag in bottle_tags(配方):            → native        （不动 brew install）
-elif 存在 macos_major <= 本机的标签:      → older-bottle  （改写路由、告警、启动校验）
-else:                                  → compile-only  （找上游源，否则拒绝）
+if tag in bottle_tags(配方):                 → native        （不动 brew install）
+elif 存在 macos_major <= 本机的标签:           → older-bottle  （直接浇注、告警）
+elif ghcr.io 上有更老版本带这样的标签:          → older-bottle  （往回找、pin、告警）
+else:                                        → compile-only  （找上游源，否则拒绝）
 ```
 
 **绝不能**路由到比本机更新的 bottle——它会链接本机不存在的符号。这就是“probable”和
-“想当然”的区别。
+“想当然”的区别。CPU 一律取自 `uname -m`，绝不从标签字符串猜：`ventura` 是 Intel 标签，
+`arm64_ventura` 不是。
+
+`ibrew census` 把各个桶分开报，所以被 Apple 放弃的机器也能看到自己究竟能装多少：在
+macOS 26 Intel 上只有约 0.3% 的配方有**原生** bottle，但有相当一部分有老 macOS 或老版本
+的 bottle。它还有第四个桶 **maybe**：API 里已经没有 Intel 标签，但 ghcr 上可能仍留着标签
+被清理之前的构建（`wget` 1.25.0 的 API 标签列表里没有 `sonoma`，ghcr 上却仍有 amd64 的
+`sonoma` layer）。maybe 只有到安装时查一次 ghcr 才能定论，所以不计入 `usable`。
 
 ## 3. 老 bottle：真正会坏在哪
 
-bottle = 可重定位的 prefix + Homebrew 的记账文件：
+bottle = 浇注时由 Homebrew 重定位的可重定位 prefix：
 
 ```
-node/23.11.0/
-  .brew/node.rb                 ← 构建时使用的配方
-  INSTALL_RECEIPT.json          ← prefix、tab、依赖
-  bin/node include/ lib/ share/
+wget/1.25.0/
+  .brew/wget.rb                 ← 构建这个 bottle 用的配方
+  bin/wget share/man/…
 ```
 
-Homebrew 依赖 `ghcr.io` 上紧邻 layer 的 OCI **config blob**（`sh.brew.bottle.digest`、
-`org.opencontainers.image.version`、prefix 信息）做重定位，再按 bottle 的校验清单逐个
-校验文件。两个后果：
+`INSTALL_RECEIPT.json` 是浇注时生成的，不存放在 bottle 里；OCI config blob 里也没有有用的
+label。真正描述一次构建的信息在 manifest 里：index 条目的 `platform`（`darwin` +
+`amd64`/`arm64` + `macOS 14`）和注解（`org.opencontainers.image.ref.name` =
+`1.25.0.sonoma`），平台 manifest 上还有 `sh.brew.bottle.digest`。两个后果：
 
-* 只 `tar xzf bottle.tar.gz` 会得到**坏的安装**（没有 receipt ⇒ `brew list` 看不到，
-  没有重定位 ⇒ `.pc`/`.dylib` 里的路径错）。
-* 安装“为别的 macOS 构建”的 bottle **不是**改个标签就行：Homebrew 会拿自己的
-  `SimulateSystem` 标签比对，不匹配就拒绝。
+* 只 `tar xzf bottle.tar.gz` 会得到**坏的安装**（没有重定位 ⇒ `.pc`/`.dylib` 里的路径错，
+  没有 receipt ⇒ `brew list` 看不到）。
+* Homebrew 只靠文件名识别本地 bottle：`HOMEBREW_BOTTLES_EXTNAME_REGEX =
+  /\.([a-z0-9_]+)\.bottle\.(?:(\d+)\.)?tar\.gz$/`，即
+  `<名字>--<版本>.<标签>.bottle[.N].tar.gz`。其它名字会被当成配方名解析
+  （`Error: Invalid tap name: '/tmp'`）。构建元数据来自旁边的 `<文件名去掉 .tar.gz>.json`
+  （`brew bottle` 写出的格式，`sh.brew.tab` 放在 `[full_name].bottle.tags[tag].tab`）；
+  没有它，receipt 里就没有 `built_on` / `runtime_dependencies`。
 
-正确做法（`installer.install_bottle` 就是这么做的）：拉 OCI index → 找到目标 macOS 的
-darwin 变体 → 下载 layer **和** config blob → 校验 layer 的 sha256 → 写回成本地 bottle
-（`.incomplete` + `.manifest.json`）→ `brew install <该文件>`。之后的重定位、链接、receipt、
-caveats 全由 Homebrew 自己做。**如果到 `ghcr.io` 的线路很慢（从国内经常如此），这条路
-很慢但正确**；`ibrew install` 优先走上游构建，正是为了绕开它。
+正确做法（`installer.install_bottle` 就是这么做的）：拉 OCI index → 只保留**本机 CPU**、
+且 macOS 不高于本机的条目 → 下载该 layer → 校验 layer 的 sha256 → 交给 Homebrew 之前先检查
+`bin`/`sbin` 载荷的 Mach-O 架构 → 按 Homebrew 的规则命名并写好 tab 伴随文件 →
+`brew install <该文件>`。之后的重定位、链接、receipt、caveats 全由 Homebrew 自己做。
 
-**启动校验。** 接受老 bottle 之前先读 Mach-O 的部署目标：
+当前版本没有可用 bottle 时，`brew.bottle_candidates` 会往更老的版本回找（默认 8 个，
+`IBREW_BOTTLE_WALK_BACK`）并依次尝试；这样装上的版本会被 `brew pin` 住，避免之后的
+`brew upgrade` 悄悄变成源码编译。ghcr 的标签列表（24 小时）和 manifest（30 天）都有缓存，
+只有第一次要付查找成本。**如果到 `ghcr.io` 的线路很慢（从国内经常如此），下载慢但正确**；
+有 curated recipe 时会直接绕开它。
+
+**启动校验。** 压缩包步骤在安装前读 Mach-O 的部署目标：
 
 ```bash
 otool -l bin/node | grep -A2 LC_BUILD_VERSION   # minos 13.5 → 需要 macOS 13.5+
 ```
 
-`installer._min_macos` 会做这件事，并在 `minos > 本机 macOS` 时告警。
+`installer._min_macos` 会做这件事，并在 `minos > 本机 macOS` 时告警。bottle 不需要这一步
+（它的平台标签已经界定了构建时的 macOS），但每个 bottle 在交给 Homebrew 之前都会做 CPU
+架构检查。
 
 ## 4. 官方上游构建才是真正的答案
 

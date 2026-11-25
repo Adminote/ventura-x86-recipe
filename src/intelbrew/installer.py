@@ -78,25 +78,59 @@ def _looks_like_prefix(src: str, formula: str) -> bool:
         and formula in " ".join(files))
 
 
+def _macho_head_ok(head: bytes, pf: PlatformInfo) -> bool | None:
+    """Arch verdict from the first bytes of a file; ``None`` when it is not Mach-O."""
+    magic = head[:4]
+    if magic not in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe"):
+        return None  # not Mach-O (script, data, universal handled below)
+    # single-arch thin x86_64 has cputype 0x01000007 at offset 4 (LE)
+    if magic in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe"):
+        cpu = int.from_bytes(head[4:8], "little")
+        if cpu == 0x01000007 and pf.arch != "x86_64":
+            return False
+        if cpu == 0x0100000C and pf.arch != "arm64":
+            return False
+    return True
+
+
 def _macho_arch_ok(path: str, pf: PlatformInfo) -> bool:
     """Reject Mach-O binaries that cannot run on this arch (universal is fine)."""
     try:
         with open(path, "rb") as fh:
-            magic = fh.read(4)
-            if magic not in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xca\xfe\xba\xbe"):
-                return True  # not Mach-O (script etc.)
-            fh.seek(0)
             head = fh.read(4096)
-        # single-arch thin x86_64 has cputype 0x01000007 at offset 4 (LE)
-        if magic in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe"):
-            cpu = int.from_bytes(head[4:8], "little")
-            if cpu == 0x01000007 and pf.arch != "x86_64":
-                return False
-            if cpu == 0x0100000C and pf.arch != "arm64":
-                return False
     except OSError:
-        pass
-    return True
+        return True
+    return _macho_head_ok(head, pf) is not False
+
+
+def _bottle_arch_ok(path: str, pf: PlatformInfo) -> tuple[bool, str]:
+    """Pre-flight the bottle tarball: is any ``bin``/``sbin`` payload the wrong CPU?"""
+    import tarfile
+
+    wrong = "arm64" if pf.arch == "x86_64" else "x86_64"
+    try:
+        with tarfile.open(path, "r:gz") as tf:
+            for m in tf:
+                parts = m.name.split("/")
+                if not m.isfile() or len(parts) < 3 or parts[-2] not in ("bin", "sbin"):
+                    continue
+                fh = tf.extractfile(m)
+                if fh is None:
+                    continue
+                if _macho_head_ok(fh.read(4096), pf) is False:
+                    return False, f"{m.name} is built for {wrong}"
+    except Exception:
+        return True, ""  # a damaged tarball fails in brew with a better message
+    return True, ""
+
+
+def _keg_arch_note(kdir: str, formula: str, pf: PlatformInfo) -> str:
+    """Post-install sanity check; never rolls anything back, only reports."""
+    wrong = "arm64" if pf.arch == "x86_64" else "x86_64"
+    for name, p in _formula_commands(formula, kdir):
+        if not _macho_arch_ok(p, pf):
+            return f"warning: {kdir}/bin/{name} looks like a {wrong} binary"
+    return ""
 
 
 def _min_macos(path: str) -> int | None:
@@ -424,135 +458,325 @@ def _npm_registry() -> str:
     return (r.out or "https://registry.npmjs.org").rstrip("/")
 
 
-def _ghcr_resolve(formula: str, version: str, want_tag: str) -> tuple:
-    """ghcr OCI index → (config blob, layer digest) of the platform variant for ``want_tag``."""
+_GHCR_ACCEPT = ("application/vnd.oci.image.index.v1+json, "
+                "application/vnd.oci.image.manifest.v1+json")
+
+
+class _BottleRejected(RuntimeError):
+    """This bottle build cannot be used here; the next candidate may still work."""
+
+
+class _BrewEnvironment(RuntimeError):
+    """Homebrew itself cannot install here, so no other bottle candidate will help."""
+
+
+def _real_brew() -> str:
+    """Homebrew itself — never our shim, which would reroute us back into here."""
+    from . import brewshim
+
+    try:
+        return brewshim.real_brew()
+    except Exception:
+        return shutil.which("brew") or "brew"
+
+
+def _prefix_write_blocker() -> str:
+    """Explain a prefix-permission refusal from ``brew install``, if that is what happened.
+
+    Homebrew checks its prefix directories *before* it reads a formula from a bottle,
+    so one root-owned directory makes every pour fail with a message about the prefix.
+    The directory list is Homebrew's own, so it cannot drift from what it checks.
+    """
+    r = run([_real_brew(), "ruby", "-e",
+             "puts Keg.must_be_writable_directories.select { |d| d.exist? && !d.writable? }"],
+            timeout=120)
+    bad = [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip().startswith("/")]
+    if not bad:
+        return ""
+    who = os.environ.get("USER") or "you"
+    return (f"brew cannot install anything into its prefix: not writable by {who} "
+            f"({', '.join(bad)}). This is an environment problem, not a bad bottle — "
+            f"fix it with: sudo chown -R {who} {' '.join(bad)}")
+
+
+def _ghcr_get(url: str, tok: str, *, key: str, ttl: int,
+              accept: str = _GHCR_ACCEPT) -> dict:
+    """GET a ghcr manifest, cached on disk (indexes 24 h, platform manifests 30 d)."""
+    cache = os.path.join(net.cache_dir("ghcr"), re.sub(r"[^A-Za-z0-9_.-]", "_", key) + ".json")
+    if net._ttl_fresh(cache, ttl):
+        data = _read_json(cache, None)
+        if isinstance(data, dict):
+            return data
+    r = net.request(url, headers={"Authorization": f"Bearer {tok}", "Accept": accept},
+                    timeout=90)
+    if not r.ok:
+        raise RuntimeError(f"ghcr {url.rsplit('/', 1)[-1][:24]}: {r.error or r.status}")
+    try:
+        data = r.json()
+    except Exception:
+        raise RuntimeError("ghcr returned a non-JSON manifest") from None
+    if not isinstance(data, dict):
+        raise RuntimeError("ghcr returned an unexpected manifest")
+    try:
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        with open(cache, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+    except OSError:
+        pass
+    return data
+
+
+def _split_ref(ref: str) -> tuple[str, str]:
+    """``1.8.2.sonoma`` → ("1.8.2", "sonoma"); a trailing rebuild is dropped too."""
+    parts = [p for p in (ref or "").split(".") if p]
+    if len(parts) >= 3 and parts[-1].isdigit():
+        parts.pop()                              # ghcr writes `<version>.<tag>.<rebuild>`
+    if len(parts) >= 2 and brew.macos_of_tag(parts[-1]) is not None:
+        return ".".join(parts[:-1]), parts[-1]
+    return ref or "", ""
+
+
+def _entry_major(m: dict) -> int | None:
+    """macOS major of one index entry, from its bottle tag or its platform field."""
+    ref = (m.get("annotations") or {}).get("org.opencontainers.image.ref.name", "")
+    major = brew.macos_of_tag(_split_ref(ref)[1])
+    if major is not None:
+        return major
+    mm = re.match(r"\D*(\d+)", (m.get("platform") or {}).get("os.version", "") or "")
+    return int(mm.group(1)) if mm else None
+
+
+def _ghcr_resolve(formula: str, oci_tag: str, pf: PlatformInfo, want_tag: str = "") -> dict:
+    """Pick this machine's build out of a ghcr OCI index.
+
+    The CPU comes from ``pf.arch``, never from the tag string: ``ventura`` and
+    ``sonoma`` are Intel tags, ``arm64_sonoma`` is not.
+    """
     repo = brew.ghcr_repo(formula)
     tok = brew.ghcr_token(repo)
     if not tok:
-        raise RuntimeError(f"ghcr token denied for {repo}")
+        raise _BottleRejected(f"ghcr token denied for {repo}")
     base = f"https://ghcr.io/v2/homebrew/core/{repo}"
+    idx = _ghcr_get(f"{base}/manifests/{oci_tag}", tok, key=f"{repo}-{oci_tag}-index",
+                    ttl=24 * 3600)
+    want_arch = "amd64" if pf.arch == "x86_64" else "arm64"
+    mine = pf.macos_version[0] if pf.macos_version else 0
+    want_major = brew.macos_of_tag(want_tag) if want_tag else None
 
-    def get(url, accept):
-        r = net.request(url, headers={"Authorization": f"Bearer {tok}", "Accept": accept},
-                        timeout=90)
-        if not r.ok:
-            raise RuntimeError(f"{url}: {r.error}")
-        return r.json()
-
-    idx = get(f"{base}/manifests/{version}",
-              "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json")
-    want = {"arch": "amd64" if "x86" in want_tag else "arm64", "os": "darwin",
-            "os_version": brew.TAG_TO_MACOS[want_tag]}
-    cands = idx.get("manifests") or [idx]
-    for m in cands:
+    # ghcr answers with a bare manifest when a tag has a single platform build.
+    entries = idx.get("manifests") or ([idx] if idx.get("layers") else [])
+    best, best_rank = None, None
+    for m in entries or []:
         p = m.get("platform") or {}
-        osver = p.get("os.version", "")
-        major = re.match(r"\D*(\d+)", osver)
-        if (p.get("os") == "darwin" and p.get("architecture") == want["arch"]
-                and major and int(major.group(1)) == want["os_version"]):
-            ref = m.get("annotations", {}).get("org.opencontainers.image.ref.name", "")
-            tag = ref.rsplit(".", 1)[-1] if ref else ""
-            man = get(f"{base}/manifests/{m['digest']}",
-                      "application/vnd.oci.image.manifest.v1+json")
-            layers = man.get("layers", [])
-            cfg = next((lay["digest"] for lay in layers
-                        if (lay.get("annotations") or {}).get("sh.brew.bottle.install")), None) \
-                or (man.get("config") or {}).get("digest")
-            layer = next((lay["digest"] for lay in layers
-                          if ((lay.get("annotations") or {})
-                              .get("org.opencontainers.image.title") or "")
-                          .endswith("bottle.tar.gz")), None)
-            if cfg and layer:
-                return cfg, layer, tag
-    raise RuntimeError(f"no darwin/{want['arch']} macOS {want['os_version']} bottle in "
-                       f"{formula} {version} on ghcr")
+        if p.get("os") not in (None, "", "darwin"):
+            continue                                    # linux bottles ride in the same index
+        if p.get("architecture") not in (None, "", want_arch):
+            continue
+        major = _entry_major(m)
+        if major is None or (mine and major > mine) or not m.get("digest"):
+            continue
+        rank = (1 if want_major and major == want_major else 0, major)
+        if best_rank is None or rank > best_rank:
+            best, best_rank = m, rank
+    if not best:
+        raise _BottleRejected(f"no {want_arch} darwin bottle for {formula} {oci_tag} "
+                              f"usable on {pf.pretty_name}")
+
+    digest = best["digest"]
+    man = _ghcr_get(f"{base}/manifests/{digest}", tok, key=f"{repo}-{digest.split(':')[-1]}",
+                    ttl=30 * 86400,
+                    accept="application/vnd.oci.image.manifest.v1+json")
+    ann = dict(best.get("annotations") or {})
+    ann.update(man.get("annotations") or {})            # manifest annotations win
+
+    layers = man.get("layers") or []
+    layer = next((lay for lay in layers
+                  if re.search(r"bottle(?:\.\d+)?\.tar\.gz$",
+                               (lay.get("annotations") or {})
+                               .get("org.opencontainers.image.title", ""))), None)
+    if not layer:
+        raise _BottleRejected(f"{formula} {oci_tag}: ghcr manifest carries no bottle layer")
+
+    ref = ann.get("org.opencontainers.image.ref.name", "")
+    version, ref_tag = _split_ref(ref)
+    if not version:
+        version, _ = brew.parse_oci_tag(oci_tag)
+    platform = best.get("platform") or {}
+    return {
+        "layer": layer["digest"],
+        "digest": ann.get("sh.brew.bottle.digest") or layer["digest"].split(":")[-1],
+        "oci_tag": oci_tag,
+        "version": version,
+        "rebuild": brew.parse_oci_tag(oci_tag)[1],
+        "tag": ref_tag or brew.tag_for(pf) or "",
+        "os_version": platform.get("os.version", ""),
+        "os_major": _entry_major(best),
+        "tab": ann.get("sh.brew.tab") or "",
+    }
+
+
+def _brew_pin(formula: str, version: str) -> bool:
+    """Pin an older-than-current bottle so ``brew upgrade`` cannot force a source build."""
+    info_ = brew.bottle_info(formula)
+    if not info_ or not version:
+        return False
+    if brew.version_key(version) >= brew.version_key(info_.version):
+        return False
+    if run([_real_brew(), "pin", formula], timeout=120).ok:
+        warn(f"{formula} {version} predates {info_.version}; pinned so `brew upgrade` keeps it")
+        return True
+    return False
+
+
+def _install_native_bottle(step: dict, formula: str, pf: PlatformInfo, out: Outcome) -> Outcome:
+    """A bottle for this exact platform exists: let Homebrew do the whole job."""
+    env = dict(os.environ, HOMEBREW_NO_AUTO_UPDATE="1")
+    info(f"brew install {formula}   (native bottle for {brew.tag_for(pf)})")
+    r = run([_real_brew(), "install", formula], timeout=3600, capture=False, env=env)
+    if r.returncode != 0:
+        out.error = f"brew install {formula} failed (exit {r.returncode})"
+        return out
+    version = _installed_version(formula) or step.get("version", "")
+    kdir = brew.keg(formula, version)
+    out.installed = True
+    out.prefix = kdir
+    out.bins = [c for c, _ in _formula_commands(formula, kdir)]
+    out.report = f"brew bottle {brew.tag_for(pf)} (native install by Homebrew)"
+    note = _keg_arch_note(kdir, formula, pf) if os.path.isdir(kdir) else ""
+    if note:
+        warn(note)
+        out.report += f"; {note}"
+    _record_install(formula, {**step, "version": version}, out)
+    return out
+
+
+def _pour_bottle(step: dict, formula: str, pf: PlatformInfo, out: Outcome, meta: dict) -> Outcome:
+    """Download one verified bottle build, name it the way Homebrew expects, pour it."""
+    repo = brew.ghcr_repo(formula)
+    tok = brew.ghcr_token(repo)
+    if not tok:
+        raise _BottleRejected(f"ghcr token denied for {repo}")
+    base = f"https://ghcr.io/v2/homebrew/core/{repo}"
+    auth = {"Authorization": f"Bearer {tok}", "Accept": "application/octet-stream"}
+    cache = net.cache_dir("bottles")
+    layer = meta["layer"]
+    layer_local = os.path.join(cache, os.path.basename(layer) + ".tar.gz")
+    r = net.download(base + "/blobs/" + layer, layer_local, digest=layer.split(":")[1],
+                     show=True, headers=auth)
+    if not r.ok:
+        raise RuntimeError(f"bottle download failed: {r.error}")
+
+    ok_arch, why = _bottle_arch_ok(layer_local, pf)
+    if not ok_arch:
+        raise _BottleRejected(f"{formula} {meta['oci_tag']}: {why}")
+
+    version = meta.get("version") or step.get("version") or ""
+    tag_name = meta.get("tag") or step.get("tag") or ""
+    if not version or not tag_name:
+        raise _BottleRejected(f"{formula}: ghcr manifest does not name a version/tag")
+    fn = f"{formula.replace('/', '-')}--{version}.{tag_name}.bottle"
+    if meta.get("rebuild"):
+        fn += f".{meta['rebuild']}"
+    final = os.path.join(cache, fn + ".tar.gz")
+    # Homebrew identifies a local bottle by this exact file name
+    # (HOMEBREW_BOTTLES_EXTNAME_REGEX) and reads the pour metadata from
+    # ``<name minus .tar.gz>.json`` — the shape `brew bottle` writes.
+    if os.path.abspath(final) != os.path.abspath(layer_local):
+        if os.path.exists(final):
+            os.unlink(final)
+        try:
+            os.link(layer_local, final)
+        except OSError:
+            shutil.copyfile(layer_local, final)
+    sidecar = os.path.join(cache, fn + ".json")
+    tab = meta.get("tab")
+    if isinstance(tab, str) and tab:
+        try:
+            meta["tab"] = tab = json.loads(tab)
+        except ValueError:
+            meta["tab"] = tab = None
+    if isinstance(tab, dict):
+        with open(sidecar, "w", encoding="utf-8") as fh:
+            json.dump({formula: {"bottle": {"tags": {tag_name: {"tab": tab}}}}}, fh)
+    elif os.path.exists(sidecar):
+        os.unlink(sidecar)
+
+    env = dict(os.environ, HOMEBREW_NO_AUTO_UPDATE="1",
+               HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK="1")
+    info(f"brew install <{fn}>   (bottle {tag_name}, sha256 verified)")
+    r = run([_real_brew(), "install", final], timeout=3600, capture=False, env=env)
+    if r.returncode != 0:
+        blocker = _prefix_write_blocker()
+        if blocker:
+            raise _BrewEnvironment(blocker)
+        tail = ((r.stderr or r.stdout or "").strip().splitlines() or [""])[-1]
+        out.error = ("brew install of the verified bottle failed"
+                     + (f": {tail}" if tail else " (its output is above; nothing was captured)"))
+        raise _BottleRejected(out.error)
+
+    kdir = brew.keg(formula, version)
+    if not os.path.isdir(kdir):
+        iv = _installed_version(formula)
+        if iv:
+            version, kdir = iv, brew.keg(formula, iv)
+    out.installed = True
+    out.prefix = kdir
+    out.bins = [c for c, _ in _formula_commands(formula, kdir)]
+    pinned = _brew_pin(formula, version)
+    out.report = (f"brew bottle {tag_name} {version} (sha256 verified, Homebrew relocation applied"
+                  + ("; pinned" if pinned else "") + ")")
+    note = _keg_arch_note(kdir, formula, pf) if os.path.isdir(kdir) else ""
+    if note:
+        warn(note)
+        out.report += f"; {note}"
+    _record_install(formula, {**step, "version": version}, out)
+    return out
 
 
 def install_bottle(step: dict, formula: str, pf: PlatformInfo) -> Outcome:
     """Install a Homebrew *bottle* ourselves (brew can't: not a platform tag / old version).
 
-    The bottle's OCI config blob carries the Homebrew relocation info (cellar
-    prefix + install receipts), which we stage before handing over to
-    ``brew install <local bottle>`` so Homebrew still does the linking checks,
-    dependency checks and caveats.
+    Candidates are tried newest-first: the current version, then older releases
+    that still have a build this machine can run. The bottle's OCI config blob
+    carries the Homebrew relocation info, which we stage next to the tarball
+    before handing over to ``brew install <local bottle>`` so Homebrew still
+    does linking, dependency checks and caveats.
     """
     out = Outcome(formula=formula, step=step)
     if not shutil.which("brew"):
         out.error = "brew not found"
         return out
-    version = step.get("version") or brew.bottle_info(formula).version
-    want_tag = step.get("tag") or brew.tag_for(pf)
-    try:
-        cfg_digest, layer_digest, real_tag = _ghcr_resolve(formula, version, want_tag)
-    except Exception as e:
-        out.error = str(e)
+    if step.get("native"):
+        return _install_native_bottle(step, formula, pf, out)
+
+    cands = list(step.get("candidates") or [])
+    if not cands:
+        cands = [{"oci_tag": step.get("version", ""), "version": step.get("version", ""),
+                  "tag": step.get("tag", "")}]
+    errors: list[str] = []
+    for cand in cands:
+        oci = str(cand.get("oci_tag") or cand.get("version") or "")
+        if not oci:
+            continue
+        tag = cand.get("tag") or step.get("tag") or brew.tag_for(pf) or ""
+        try:
+            meta = _ghcr_resolve(formula, oci, pf, tag)
+        except _BottleRejected as e:
+            errors.append(str(e))
+            continue
+        try:
+            return _pour_bottle(step, formula, pf, out, meta)
+        except _BottleRejected as e:
+            errors.append(str(e))
+            continue
+        except _BrewEnvironment as e:
+            # Every candidate would fail the same way; stop instead of downloading more.
+            out.error = str(e)
+            return out
+    if not errors:
+        out.error = f"no bottle candidates for {formula}"
         return out
-    repo = brew.ghcr_repo(formula)
-    tok = brew.ghcr_token(repo)
-    base = f"https://ghcr.io/v2/homebrew/core/{repo}"
-    cache = net.cache_dir("bottles")
-    layer_local = os.path.join(cache, os.path.basename(layer_digest) + ".tar.gz")
-    # ghcr blob URLs are digest-addressed; fetch with the token, verify the sha256
-    r = net.download(base + "/blobs/" + layer_digest, layer_local,
-                     digest=layer_digest.split(":")[1], show=True,
-                     headers={"Authorization": f"Bearer {tok}", "Accept": "application/octet-stream"})
-    if not r.ok:
-        out.error = f"bottle download failed: {r.error}"
-        return out
-    cfg_local = os.path.join(cache, os.path.basename(cfg_digest) + ".json")
-    r = net.download(base + "/blobs/" + cfg_digest, cfg_local, digest=cfg_digest.split(":")[1],
-                     headers={"Authorization": f"Bearer {tok}", "Accept": "application/octet-stream"})
-    if not r.ok:
-        out.error = f"bottle config download failed: {r.error}"
-        return out
-    cfg = _read_json(cfg_local, {})
-    if not cfg:
-        out.error = "bottle config blob is not valid JSON"
-        return out
-    b = (cfg.get("config") or {}).get("Labels") or {}
-    bottle_hash = b.get("sh.brew.bottle.digest") or ""
-    want_ver = b.get("org.opencontainers.image.version") or version
-    tag_name = b.get("sh.brew.bottle.digest.arch") or want_tag
-    if b.get("sh.brew.bottle.digest"):
-        cfg_bytes = json.dumps(cfg, indent=None, separators=(",", ":")).encode()
-        with open(cfg_local, "wb") as fh:
-            fh.write(cfg_bytes)
-    # Local install of a bottle: Homebrew reads ``<file>.manifest.json`` next to
-    # the wine, plus the bottle marker files inside the tarball.
-    fn = f"{formula.replace('/', '-')}--{want_ver}.{tag_name}.bottle.tar.gz"
-    final = os.path.join(cache, fn)
-    sidecar = {
-        "schemaVersion": 2,
-        "manifests": [{
-            "mediaType": "application/vnd.oci.image.manifest.v1+json",
-            "digest": "sha256:" + net.file_digest(cfg_local, "sha256"),
-            "size": os.path.getsize(cfg_local),
-            "platform": {"architecture": "amd64" if pf.arch == "x86_64" else "arm64",
-                         "os": "darwin", "os.version": f"macOS {brew.TAG_TO_MACOS[want_tag]}"},
-            "annotations": {"sh.brew.bottle.digest": bottle_hash or layer_digest.split(":")[1]},
-        }],
-    }
-    local = os.path.join(cache, f"{os.path.basename(final)}.incomplete")
-    shutil.copyfile(layer_local, local)
-    with open(os.path.join(cache, f"{os.path.basename(local)}.manifest.json"), "w") as fh:
-        json.dump(sidecar, fh)
-    env = dict(os.environ, HOMEBREW_NO_AUTO_UPDATE="1",
-               HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK="1")
-    info(f"brew install <{os.path.basename(local)}>   (bottle {tag_name}, sha256 verified)")
-    r = run(["brew", "install", local], timeout=3600, capture=False, env=env)
-    if r.returncode != 0:
-        r2 = run(["brew", "install", local], timeout=3600)
-        out.error = ("brew install of the verified bottle failed: "
-                     + ((r2.stderr or r2.stdout or "").strip().splitlines() or ["?"])[-1])
-        return out
-    kdir = brew.keg(formula, want_ver)
-    out.installed = True
-    out.prefix = kdir
-    out.bins = [c for c, _ in _formula_commands(formula, kdir)]
-    out.report = (f"brew bottle {tag_name} (sha256 verified, Homebrew relocation applied"
-                  + ("; platform tag differs from Homebrew's own" if real_tag != brew.tag_for(pf) else "")
-                  + ")")
-    _record_install(formula, step, out)
+    out.error = "; ".join(errors[-3:])
     return out
 
 
