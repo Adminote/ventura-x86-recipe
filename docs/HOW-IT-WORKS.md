@@ -55,12 +55,26 @@ The CPU always comes from `uname -m`, never from the tag string: `ventura` is an
 tag, `arm64_ventura` is not.
 
 `ibrew census` reports the buckets separately, so a machine Apple abandoned still shows
-what it can install: on macOS 26 Intel only ~0.3% of formulas have a *native* bottle, but
-far more have one built for an older macOS or an older release. It also reports a
-**maybe** bucket — formulas where the API lists no Intel tag at all but a bottle may still
-sit on ghcr from before that tag was pruned (`wget` 1.25.0 keeps an amd64 `sonoma` layer
-although `sonoma` no longer appears in its API tag list). Only the ghcr lookup at install
-time can settle a maybe, so census counts it apart from `usable`.
+what it can install. Measured with `ibrew census` on an Intel Mac running macOS 26.7.2,
+against the core index of 8740 formulas (2026-11-26):
+
+| Bucket | Formulas | Share | Zero-dependency | `brew install` itself |
+|---|---:|---:|---:|---|
+| native (`tahoe`) | 29 | 0.3% | 14 | pours the bottle |
+| older Intel tag (3388 of 3394 are `sonoma`) | 3394 | 38.8% | 2072 | **compiles from source** |
+| maybe (no Intel tag left in the API) | 3905 | 44.7% | 1721 | compiles from source |
+| compile only | 1256 | 14.4% | 411 | compiles from source |
+
+That is the whole point of the route: **39% of core (3423 formulas) can be poured here,
+about 118× what `brew` will bottle on this machine**, and **2086 of them need no compiler
+at all** — not for the formula, not for a dependency.
+
+The **maybe** bucket is an upper bound, not a promise. A formula that only ever had arm64
+bottles looks exactly like one whose Intel tag was pruned (both simply lack an Intel tag),
+so only the ghcr lookup at install time can settle it — which is why census counts it
+apart from `usable`. A 25-formula sample of zero-dependency maybe entries resolved on ghcr
+**1 in 25 (4%)** (`typescript` 7.0.2, `sonoma`), so the realistic ceiling is ~41%, not the
+~84% of "everything that is not compile-only".
 
 ## 3. Older bottles: what actually breaks
 

@@ -52,11 +52,25 @@ else:                                        → compile-only  （找上游源�
 “想当然”的区别。CPU 一律取自 `uname -m`，绝不从标签字符串猜：`ventura` 是 Intel 标签，
 `arm64_ventura` 不是。
 
-`ibrew census` 把各个桶分开报，所以被 Apple 放弃的机器也能看到自己究竟能装多少：在
-macOS 26 Intel 上只有约 0.3% 的配方有**原生** bottle，但有相当一部分有老 macOS 或老版本
-的 bottle。它还有第四个桶 **maybe**：API 里已经没有 Intel 标签，但 ghcr 上可能仍留着标签
-被清理之前的构建（`wget` 1.25.0 的 API 标签列表里没有 `sonoma`，ghcr 上却仍有 amd64 的
-`sonoma` layer）。maybe 只有到安装时查一次 ghcr 才能定论，所以不计入 `usable`。
+`ibrew census` 把各个桶分开报，所以被 Apple 放弃的机器也能看到自己究竟能装多少。以下为
+实测：Intel Mac、macOS 26.7.2、core 索引 8740 个配方，数据由 `ibrew census` 于 2026-11-26
+跑出：
+
+| 桶 | 配方数 | 占比 | 零依赖 | 直接 `brew install` 会怎样 |
+|---|---:|---:|---:|---|
+| native（`tahoe`） | 29 | 0.3% | 14 | 浇注 bottle |
+| 老 Intel 标签（3394 个里 3388 个是 `sonoma`） | 3394 | 38.8% | 2072 | **从源码编译** |
+| maybe（API 里已无 Intel 标签） | 3905 | 44.7% | 1721 | 从源码编译 |
+| 只能编译 | 1256 | 14.4% | 411 | 从源码编译 |
+
+这就是这条路线的意义：**core 的 39%（3423 个配方）能在这台机器上直接浇注，约为 `brew`
+本机能浇数量的 118 倍**，其中 **2086 个连编译器都不需要**——配方本身和依赖都不需要。
+
+**maybe** 桶是上界，不是承诺。只发布过 arm64 bottle 的配方，和 Intel 标签被清理掉的配方，
+在 API 里长得一模一样（都只是“没有 Intel 标签”），所以只有安装时查一次 ghcr 才能定论——
+这也是 census 不把它计入 `usable` 的原因。对零依赖 maybe 配方抽了 25 个，ghcr 上真的命中
+**1/25（4%）**（`typescript` 7.0.2，`sonoma`），所以现实的天花板约 41%，而不是“非只能编译
+皆可”的约 84%。
 
 ## 3. 老 bottle：真正会坏在哪
 
