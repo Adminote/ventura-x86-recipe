@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import sys
 import tarfile
 import zipfile
@@ -244,6 +245,118 @@ def test_jq_recipe_is_a_raw_binary():
     assert step["bin"] == ["jq"]
     assert len(step["sha256"]) == 64
     assert r.check_requirements(_pf()) == ""
+
+
+# --------------------------------------------------------------------------- #
+# reinstall safety: a rejected replacement must not destroy the working install
+# --------------------------------------------------------------------------- #
+
+_MACHO_MAGIC = b"\xcf\xfa\xed\xfe"
+_CPU_X86_64 = (0x01000007).to_bytes(4, "little")
+_CPU_ARM64 = (0x0100000C).to_bytes(4, "little")
+
+
+def _macho(cpu: bytes, tag: bytes = b"") -> bytes:
+    return _MACHO_MAGIC + cpu + b"\x00" * 60 + tag
+
+
+def _bin_archive(path, members):
+    with tarfile.open(path, "w:gz") as tf:
+        for name, data in members:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = 0o755
+            tf.addfile(info, io.BytesIO(data))
+
+
+def _fake_download(monkeypatch, src):
+    from intelbrew import net
+
+    def fake(urls, dest, *, digest="", algo="sha256", **kw):
+        shutil.copyfile(src, dest)
+        return net.Fetch(ok=True, url=urls[0]), []
+
+    monkeypatch.setattr(net, "download_race", fake)
+
+
+def _archive_step(name):
+    return {"kind": "archive", "url": f"https://example.invalid/{name}",
+            "sha256": "0" * 64, "fmt": "", "bin": [], "strip": 1}
+
+
+def _sandbox(tmp_path, monkeypatch):
+    ib = tmp_path / "ib"
+    monkeypatch.setenv("INTELBREW_HOME", str(ib))
+    monkeypatch.setenv("IBREW_BIN_DIR", str(ib / "bin"))
+    from intelbrew import installer
+
+    return installer, ib
+
+
+def test_reinstall_with_wrong_cpu_keeps_the_working_install(tmp_path, monkeypatch):
+    installer, ib = _sandbox(tmp_path, monkeypatch)
+    old = ib / "root" / "opt" / "tool" / "bin" / "tool"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(_macho(_CPU_X86_64, b"old"))
+    old.chmod(0o755)
+    installer.make_links({"tool": str(old)})
+
+    bad = tmp_path / "tool-arm64.tar.gz"
+    _bin_archive(bad, [("tool-1.0/bin/tool", _macho(_CPU_ARM64))])
+    _fake_download(monkeypatch, bad)
+
+    out = installer.install_archive(_archive_step("tool-arm64.tar.gz"), "tool", _pf(),
+                                    allow_unverified=False)
+
+    assert not out.installed
+    assert "another CPU architecture" in out.error
+    assert old.read_bytes().endswith(b"old")          # working install untouched
+    link = ib / "bin" / "tool"
+    assert link.is_symlink()
+    assert link.read_bytes().endswith(b"old")
+
+
+def test_reinstall_rejects_a_wrong_cpu_secondary_binary(tmp_path, monkeypatch):
+    installer, ib = _sandbox(tmp_path, monkeypatch)
+    d = ib / "root" / "opt" / "uv" / "bin"
+    d.mkdir(parents=True)
+    for n in ("uv", "uvx"):
+        (d / n).write_bytes(_macho(_CPU_X86_64, b"old"))
+        (d / n).chmod(0o755)
+    installer.make_links({"uv": str(d / "uv"), "uvx": str(d / "uvx")})
+
+    bad = tmp_path / "uv.tar.gz"
+    _bin_archive(bad, [("uv-1.0/bin/uv", _macho(_CPU_X86_64, b"new")),
+                       ("uv-1.0/bin/uvx", _macho(_CPU_ARM64))])
+    _fake_download(monkeypatch, bad)
+
+    out = installer.install_archive(_archive_step("uv.tar.gz"), "uv", _pf(),
+                                    allow_unverified=False)
+
+    assert not out.installed
+    assert "uvx is built for another CPU architecture" in out.error
+    for n in ("uv", "uvx"):
+        assert (d / n).read_bytes().endswith(b"old")
+
+
+def test_reinstall_with_the_right_cpu_replaces_the_old_tree(tmp_path, monkeypatch):
+    installer, ib = _sandbox(tmp_path, monkeypatch)
+    old = ib / "root" / "opt" / "tool" / "bin" / "tool"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(_macho(_CPU_X86_64, b"old"))
+    old.chmod(0o755)
+    installer.make_links({"tool": str(old)})
+
+    good = tmp_path / "tool.tar.gz"
+    _bin_archive(good, [("tool-2.0/bin/tool", _macho(_CPU_X86_64, b"new"))])
+    _fake_download(monkeypatch, good)
+
+    out = installer.install_archive(_archive_step("tool.tar.gz"), "tool", _pf(),
+                                    allow_unverified=False)
+
+    assert out.installed, out.error
+    assert (ib / "bin" / "tool").read_bytes().endswith(b"new")
+    assert not any((ib / "tmp").iterdir())
 
 
 # --------------------------------------------------------------------------- #

@@ -324,28 +324,40 @@ def install_archive(step: dict, formula: str, pf: PlatformInfo, *, allow_unverif
         mode = "bin"
     else:
         bins, mode = _install_archive_dir(ex, formula, step, pf, stage)
-    archives_dir = os.path.join(root(), "opt")
-    dest = os.path.join(archives_dir, formula)
-    if os.path.exists(dest):
-        shutil.move(dest, os.path.join(work, "old-root"))
-        shutil.rmtree(os.path.join(work, "old-root"), ignore_errors=True)
-    os.makedirs(archives_dir, exist_ok=True)
-    shutil.move(stage, dest)
-    archive.strip_quarantine(dest)
 
-    # pre-flight: does the main binary look runnable here?
-    main = next(iter(bins.values()), None)
-    if main:
-        p = os.path.join(dest, main)
+    # Pre-flight on the staged tree, before the working install is touched:
+    # a rejected replacement (wrong CPU, unlaunchable) must leave the old one intact.
+    for rel in bins.values():
+        p = os.path.join(stage, rel)
         if not _macho_arch_ok(p, pf):
             out.error = f"{os.path.basename(p)} is built for another CPU architecture"
+            shutil.rmtree(work, ignore_errors=True)
             return out
-        minos = _min_macos(p)
+    main = next(iter(bins.values()), None)
+    if main:
+        minos = _min_macos(os.path.join(stage, main))
         if minos and pf.macos_version and minos > pf.macos_version[0]:
             warn(f"{formula}: binary declares minimum macOS {minos}, machine has "
                  f"{pf.macos_version[0]}; it may refuse to launch")
 
-    made = make_links({cmd: os.path.join(dest, rel) for cmd, rel in bins.items()})
+    archives_dir = os.path.join(root(), "opt")
+    dest = os.path.join(archives_dir, formula)
+    old = os.path.join(work, "old-root")
+    moved_old = os.path.exists(dest)
+    if moved_old:
+        shutil.move(dest, old)
+    os.makedirs(archives_dir, exist_ok=True)
+    try:
+        shutil.move(stage, dest)
+        archive.strip_quarantine(dest)
+        made = make_links({cmd: os.path.join(dest, rel) for cmd, rel in bins.items()})
+    except BaseException:
+        # put the previous working install back; its links resolve to the same paths
+        shutil.rmtree(dest, ignore_errors=True)
+        if moved_old:
+            shutil.move(old, dest)
+        shutil.rmtree(work, ignore_errors=True)
+        raise
     rep.level = verify.ensure_trusted_level(rep.integrity, rep.provenance, rep.notes)
     out.installed = True
     out.prefix = dest
